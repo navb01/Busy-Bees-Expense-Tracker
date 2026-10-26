@@ -104,6 +104,9 @@ define(['./workbox-7e5eb42b'], (function (workbox) { 'use strict';
     "url": "assets/index-B51xp6Sa.js",
     "revision": null
   }, {
+    "url": "assets/aistudio/error4_d204b4cb.png",
+    "revision": null
+  }, {
     "url": "assets/aistudio/error3_b70286e6.png",
     "revision": null
   }, {
