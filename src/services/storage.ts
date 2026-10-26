@@ -7,12 +7,13 @@ const STORAGE_KEYS = {
   SETTINGS: 'bb_settings_v1',
   LAST_ACTIVE: 'bb_last_active_time',
   LAST_NOTIFIED: 'bb_last_notified_time',
+  INSTALLED_AT: 'bb_installed_at_v1',
 };
 
-const CURRENT_STORAGE_VERSION = 1;
+const CURRENT_STORAGE_VERSION = 3;
 
 export const DEFAULT_PROFILE: UserProfile = {
-  name: 'Alex',
+  name: '',
   age: '',
   occupation: '',
   city: '',
@@ -29,116 +30,10 @@ export const DEFAULT_SETTINGS: AppSettings = {
   notificationsEnabled: false,
 };
 
-const getTodayISO = () => {
+export const getTodayISO = (): string => {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 };
-
-// Seed initial transactions that match the Figma screenshots perfectly
-const todayDate = getTodayISO();
-
-const SEED_TRANSACTIONS: Transaction[] = [
-  {
-    id: 'tx_seed_1',
-    type: 'income',
-    amount: 2450.00,
-    category: 'Salary',
-    date: todayDate,
-    note: 'October salary',
-    createdAt: Date.now() - 3600000 * 3,
-    updatedAt: Date.now() - 3600000 * 3,
-  },
-  {
-    id: 'tx_seed_2',
-    type: 'expense',
-    amount: 42.50,
-    category: 'Food & groceries',
-    date: todayDate,
-    note: 'Weekly groceries',
-    createdAt: Date.now() - 3600000 * 1,
-    updatedAt: Date.now() - 3600000 * 1,
-  },
-  {
-    id: 'tx_seed_3',
-    type: 'expense',
-    amount: 15.00,
-    category: 'Transport',
-    date: '2026-10-16',
-    note: 'Metro commute',
-    createdAt: new Date('2026-10-16T08:15:00Z').getTime(),
-    updatedAt: new Date('2026-10-16T08:15:00Z').getTime(),
-  },
-  {
-    id: 'tx_seed_4',
-    type: 'expense',
-    amount: 35.20,
-    category: 'Food & groceries',
-    date: '2026-10-15',
-    note: 'Farmer market vegetables',
-    createdAt: new Date('2026-10-15T14:20:00Z').getTime(),
-    updatedAt: new Date('2026-10-15T14:20:00Z').getTime(),
-  },
-  {
-    id: 'tx_seed_5',
-    type: 'expense',
-    amount: 80.00,
-    category: 'Bills & utilities',
-    date: '2026-10-12',
-    note: 'Home internet fiber plan',
-    createdAt: new Date('2026-10-12T10:00:00Z').getTime(),
-    updatedAt: new Date('2026-10-12T10:00:00Z').getTime(),
-  },
-  {
-    id: 'tx_seed_6',
-    type: 'expense',
-    amount: 25.50,
-    category: 'Entertainment',
-    date: '2026-10-10',
-    note: 'Cinema tickets',
-    createdAt: new Date('2026-10-10T19:30:00Z').getTime(),
-    updatedAt: new Date('2026-10-10T19:30:00Z').getTime(),
-  },
-  {
-    id: 'tx_seed_7',
-    type: 'income',
-    amount: 450.00,
-    category: 'Freelance',
-    date: '2026-10-08',
-    note: 'Logo design consultation',
-    createdAt: new Date('2026-10-08T16:00:00Z').getTime(),
-    updatedAt: new Date('2026-10-08T16:00:00Z').getTime(),
-  },
-  {
-    id: 'tx_seed_8',
-    type: 'expense',
-    amount: 50.00,
-    category: 'Shopping',
-    date: '2026-10-05',
-    note: 'Kitchen organizing bins',
-    createdAt: new Date('2026-10-05T13:45:00Z').getTime(),
-    updatedAt: new Date('2026-10-05T13:45:00Z').getTime(),
-  },
-  {
-    id: 'tx_seed_9',
-    type: 'expense',
-    amount: 18.00,
-    category: 'Transport',
-    date: '2026-10-03',
-    note: 'Cab to meeting',
-    createdAt: new Date('2026-10-03T09:10:00Z').getTime(),
-    updatedAt: new Date('2026-10-03T09:10:00Z').getTime(),
-  },
-  {
-    id: 'tx_seed_10',
-    type: 'expense',
-    amount: 65.00,
-    category: 'Health & medical',
-    date: '2026-10-01',
-    note: 'Routine vitamins & checkup',
-    createdAt: new Date('2026-10-01T11:00:00Z').getTime(),
-    updatedAt: new Date('2026-10-01T11:00:00Z').getTime(),
-  },
-];
 
 class StorageService {
   private initialized = false;
@@ -147,13 +42,14 @@ class StorageService {
     if (this.initialized) return;
     try {
       const storedVersion = localStorage.getItem(STORAGE_KEYS.VERSION);
-      if (!storedVersion) {
-        // First boot: set defaults & seed data
+      if (!storedVersion || Number(storedVersion) < CURRENT_STORAGE_VERSION) {
+        // Initialize / reset to a clean, empty state with zero dummy or test values
         localStorage.setItem(STORAGE_KEYS.VERSION, String(CURRENT_STORAGE_VERSION));
-        localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify(SEED_TRANSACTIONS));
+        localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify([]));
         localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify(DEFAULT_PROFILE));
         localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(DEFAULT_SETTINGS));
         localStorage.setItem(STORAGE_KEYS.LAST_ACTIVE, String(Date.now()));
+        localStorage.setItem(STORAGE_KEYS.INSTALLED_AT, getTodayISO());
       }
       this.initialized = true;
     } catch (e) {
@@ -161,12 +57,50 @@ class StorageService {
     }
   }
 
+  /**
+   * Returns the starting calendar bound (earliest of installation date or any backdated transaction).
+   */
+  getInstallDate(): { year: number; month: number; iso: string } {
+    this.init();
+    const now = new Date();
+    try {
+      let earliestIso = localStorage.getItem(STORAGE_KEYS.INSTALLED_AT) || getTodayISO();
+      if (!localStorage.getItem(STORAGE_KEYS.INSTALLED_AT)) {
+        localStorage.setItem(STORAGE_KEYS.INSTALLED_AT, earliestIso);
+      }
+
+      const transactions = this.getTransactions();
+      for (const tx of transactions) {
+        if (tx.date && tx.date < earliestIso) {
+          earliestIso = tx.date;
+        }
+      }
+
+      const d = new Date(earliestIso + 'T00:00:00');
+      if (!isNaN(d.getTime())) {
+        return {
+          year: d.getFullYear(),
+          month: d.getMonth(),
+          iso: earliestIso,
+        };
+      }
+    } catch {
+      // fallback to current date
+    }
+    return {
+      year: now.getFullYear(),
+      month: now.getMonth(),
+      iso: getTodayISO(),
+    };
+  }
+
   getTransactions(): Transaction[] {
     this.init();
     try {
       const data = localStorage.getItem(STORAGE_KEYS.TRANSACTIONS);
       if (!data) return [];
-      return JSON.parse(data) as Transaction[];
+      const parsed = JSON.parse(data) as Transaction[];
+      return parsed.filter((t) => !t.id.startsWith('tx_seed_'));
     } catch {
       return [];
     }
@@ -191,6 +125,16 @@ class StorageService {
     };
     const updated = [newTx, ...list];
     this.saveTransactions(updated);
+
+    try {
+      const currentBound = localStorage.getItem(STORAGE_KEYS.INSTALLED_AT) || getTodayISO();
+      if (tx.date && tx.date < currentBound) {
+        localStorage.setItem(STORAGE_KEYS.INSTALLED_AT, tx.date);
+      }
+    } catch {
+      // ignore
+    }
+
     return newTx;
   }
 
@@ -206,6 +150,16 @@ class StorageService {
     };
     list[index] = updatedTx;
     this.saveTransactions(list);
+
+    try {
+      const currentBound = localStorage.getItem(STORAGE_KEYS.INSTALLED_AT) || getTodayISO();
+      if (updatedTx.date && updatedTx.date < currentBound) {
+        localStorage.setItem(STORAGE_KEYS.INSTALLED_AT, updatedTx.date);
+      }
+    } catch {
+      // ignore
+    }
+
     return updatedTx;
   }
 
@@ -224,7 +178,8 @@ class StorageService {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.PROFILE);
       if (!data) return DEFAULT_PROFILE;
-      return { ...DEFAULT_PROFILE, ...JSON.parse(data) };
+      const parsed = JSON.parse(data) as UserProfile;
+      return { ...DEFAULT_PROFILE, ...parsed };
     } catch {
       return DEFAULT_PROFILE;
     }
@@ -244,7 +199,11 @@ class StorageService {
     try {
       const data = localStorage.getItem(STORAGE_KEYS.SETTINGS);
       if (!data) return DEFAULT_SETTINGS;
-      return { ...DEFAULT_SETTINGS, ...JSON.parse(data) };
+      const parsed = JSON.parse(data);
+      if (parsed.appearance !== 'Light' && parsed.appearance !== 'Dark') {
+        parsed.appearance = 'Light';
+      }
+      return { ...DEFAULT_SETTINGS, ...parsed };
     } catch {
       return DEFAULT_SETTINGS;
     }
@@ -289,34 +248,6 @@ class StorageService {
       isInactive: hours >= 24,
       hoursInactive: hours,
     };
-  }
-
-  // Backup & Restore for version control
-  exportBackupJSON(): string {
-    const data = {
-      version: CURRENT_STORAGE_VERSION,
-      exportedAt: new Date().toISOString(),
-      appName: 'Busy Bees Expense Tracker',
-      profile: this.getProfile(),
-      settings: this.getSettings(),
-      transactions: this.getTransactions(),
-    };
-    return JSON.stringify(data, null, 2);
-  }
-
-  importBackupJSON(jsonStr: string): { success: boolean; count?: number; error?: string } {
-    try {
-      const data = JSON.parse(jsonStr);
-      if (!data.transactions || !Array.isArray(data.transactions)) {
-        return { success: false, error: 'Invalid backup structure: transactions array missing.' };
-      }
-      this.saveTransactions(data.transactions);
-      if (data.profile) this.saveProfile(data.profile);
-      if (data.settings) this.saveSettings(data.settings);
-      return { success: true, count: data.transactions.length };
-    } catch (err) {
-      return { success: false, error: (err as Error).message };
-    }
   }
 }
 

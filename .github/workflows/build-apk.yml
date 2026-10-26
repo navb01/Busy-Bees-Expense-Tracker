@@ -30,12 +30,25 @@ jobs:
       - name: Build Web Assets
         run: npm run build
 
-      - name: Initialize Android Platform if Needed
+      - name: Initialize Android Platform and Apply BB App Icon
         run: |
           if [ ! -d "android" ]; then
             npx cap add android
           fi
           npx cap sync android
+
+          # Apply BB app icon across all Android mipmap directories
+          ICON_SRC="public/pwa-512x512.png"
+          if [ -f "public/assets/aistudio/BB_logo_512x512_a9c1fff0.png" ]; then
+            ICON_SRC="public/assets/aistudio/BB_logo_512x512_a9c1fff0.png"
+          fi
+          for dir in android/app/src/main/res/mipmap-mdpi android/app/src/main/res/mipmap-hdpi android/app/src/main/res/mipmap-xhdpi android/app/src/main/res/mipmap-xxhdpi android/app/src/main/res/mipmap-xxxhdpi; do
+            if [ -d "$dir" ]; then
+              cp "$ICON_SRC" "$dir/ic_launcher.png"
+              cp "$ICON_SRC" "$dir/ic_launcher_round.png"
+              cp "$ICON_SRC" "$dir/ic_launcher_foreground.png"
+            fi
+          done
 
       - name: Make Gradlew Executable
         run: chmod +x ./android/gradlew

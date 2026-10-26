@@ -17,7 +17,6 @@ import { AboutScreen } from './components/screens/AboutScreen';
 import { ProfileScreen } from './components/screens/ProfileScreen';
 import { ExitScreen } from './components/screens/ExitScreen';
 import { AppLockModal } from './components/AppLockModal';
-import { PWAInstallButton } from './components/PWAInstallButton';
 import { InAppNotificationBanner } from './components/InAppNotificationBanner';
 import { SplashScreen } from './components/SplashScreen';
 
@@ -33,10 +32,10 @@ export default function App() {
 
   // Initialize and check 24h inactivity reminder
   useEffect(() => {
-    // Show smooth splash screen on launch
     const splashTimer = setTimeout(() => {
       setIsLoading(false);
     }, 800);
+
     const loadedTx = storage.getTransactions();
     setTransactions(loadedTx);
 
@@ -49,10 +48,7 @@ export default function App() {
     const loadedProfile = storage.getProfile();
     setProfile(loadedProfile);
 
-    // Check if 24 hours of inactivity elapsed
     notificationService.checkAndTrigger24hReminder();
-
-    // Record user presence
     storage.recordActivity();
 
     const handleFocus = () => {
@@ -63,7 +59,7 @@ export default function App() {
     window.addEventListener('focus', handleFocus);
     const interval = setInterval(() => {
       notificationService.checkAndTrigger24hReminder();
-    }, 60 * 60 * 1000); // Check hourly
+    }, 60 * 60 * 1000);
 
     return () => {
       clearTimeout(splashTimer);
@@ -72,13 +68,11 @@ export default function App() {
     };
   }, []);
 
-  // Update theme appearance class on root
+  // Update theme appearance class on root html & body
   useEffect(() => {
-    if (settings.appearance === 'Dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
+    const isDark = settings.appearance === 'Dark';
+    document.documentElement.classList.toggle('dark', isDark);
+    document.body.classList.toggle('dark', isDark);
   }, [settings.appearance]);
 
   const handleNavigate = (screen: ScreenType) => {
@@ -139,14 +133,15 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-slate-100 flex justify-center items-start sm:py-6 selection:bg-blue-100 selection:text-blue-900">
-      {/* Mobile viewport frame matching Figma designs */}
-      <div className="w-full max-w-md min-h-screen sm:min-h-[844px] sm:max-h-[920px] bg-slate-50 flex flex-col shadow-2xl sm:rounded-[36px] overflow-hidden border border-slate-200/80 relative">
+    <div
+      className={`min-h-screen flex justify-center items-start sm:py-6 selection:bg-blue-100 selection:text-blue-900 ${
+        settings.appearance === 'Dark' ? 'dark bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-900'
+      }`}
+    >
+      {/* Mobile viewport frame */}
+      <div className="w-full max-w-md min-h-screen sm:min-h-[844px] sm:max-h-[920px] bg-slate-50 dark:bg-slate-900 flex flex-col shadow-2xl sm:rounded-[36px] overflow-hidden border border-slate-200/80 dark:border-slate-800 relative transition-colors duration-200">
         {/* Loading Splash Screen */}
         {isLoading && <SplashScreen />}
-
-        {/* In-app install banner (PWA) */}
-        <PWAInstallButton />
 
         {/* Global In-app notification toast */}
         <InAppNotificationBanner
@@ -178,6 +173,7 @@ export default function App() {
           {currentScreen === 'add-income' && (
             <AddTransactionScreen
               type="income"
+              transactions={transactions}
               editingTransaction={editingTransaction}
               settings={settings}
               onSave={handleSaveTransaction}
@@ -188,6 +184,7 @@ export default function App() {
           {currentScreen === 'add-expense' && (
             <AddTransactionScreen
               type="expense"
+              transactions={transactions}
               editingTransaction={editingTransaction}
               settings={settings}
               onSave={handleSaveTransaction}

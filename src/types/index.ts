@@ -27,7 +27,7 @@ export interface CurrencyConfig {
 }
 
 export type WeekStartDay = 'Monday' | 'Sunday';
-export type AppearanceMode = 'Light' | 'Dark' | 'System';
+export type AppearanceMode = 'Light' | 'Dark';
 
 export interface AppSettings {
   currency: CurrencyCode;

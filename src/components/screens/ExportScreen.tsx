@@ -29,7 +29,6 @@ export const ExportScreen: React.FC<ExportScreenProps> = ({ transactions, settin
 
   const filtered = filterTransactionsByRange(transactions, dateRange);
 
-  // Compute date range span string e.g. "October 1–17, 2026 · Income & expenses"
   const getDateSpanLabel = () => {
     if (filtered.length === 0) return 'No transactions in period';
     const dates = filtered.map((t) => new Date(t.date + 'T00:00:00').getTime()).sort((a, b) => a - b);
@@ -69,27 +68,27 @@ export const ExportScreen: React.FC<ExportScreenProps> = ({ transactions, settin
   return (
     <div className="flex-1 flex flex-col justify-between px-6 py-6 max-w-lg mx-auto w-full overflow-y-auto">
       <div className="space-y-6">
-        <p className="text-slate-500 text-sm leading-relaxed">
+        <p className="text-slate-500 dark:text-slate-400 text-sm leading-relaxed">
           Take your transactions with you. Choose a date range and file format.
         </p>
 
         {/* Date range picker */}
         <div>
-          <label className="block text-xs font-medium text-slate-500 mb-1.5">
+          <label className="block text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5">
             Date range
           </label>
           <div className="relative">
             <select
               value={dateRange}
               onChange={(e) => setDateRange(e.target.value as DateRangeOption)}
-              className="w-full appearance-none px-4 py-3.5 bg-white border border-slate-200/90 rounded-2xl text-slate-900 text-[15px] font-medium shadow-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 pr-10 cursor-pointer"
+              className="w-full appearance-none px-4 py-3.5 bg-white dark:bg-slate-800 border border-slate-200/90 dark:border-slate-700 rounded-2xl text-slate-900 dark:text-slate-100 text-[15px] font-medium shadow-xs focus:outline-none focus:ring-2 focus:ring-blue-500/20 pr-10 cursor-pointer"
             >
               <option value="this_month">This month</option>
               <option value="quarter">Quarter</option>
               <option value="year">Year</option>
               <option value="all_time">All time</option>
             </select>
-            <div className="absolute right-4 top-4 pointer-events-none text-slate-500">
+            <div className="absolute right-4 top-4 pointer-events-none text-slate-500 dark:text-slate-400">
               <ChevronDown className="w-4 h-4" />
             </div>
           </div>
@@ -97,7 +96,7 @@ export const ExportScreen: React.FC<ExportScreenProps> = ({ transactions, settin
 
         {/* FILE FORMAT */}
         <div>
-          <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wider mb-2.5">
+          <label className="block text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-2.5">
             File format
           </label>
 
@@ -108,15 +107,15 @@ export const ExportScreen: React.FC<ExportScreenProps> = ({ transactions, settin
               onClick={() => setFileFormat('csv')}
               className={`p-4 rounded-2xl flex items-center justify-between transition border-2 ${
                 fileFormat === 'csv'
-                  ? 'border-[#2357A4] bg-blue-50/20 shadow-xs'
-                  : 'border-slate-200 bg-white hover:border-slate-300'
+                  ? 'border-[#2357A4] dark:border-blue-400 bg-blue-50/20 dark:bg-blue-950/30 shadow-xs'
+                  : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-slate-300 dark:hover:border-slate-600'
               }`}
             >
-              <span className="font-semibold text-sm text-slate-900">CSV</span>
+              <span className="font-semibold text-sm text-slate-900 dark:text-slate-100">CSV</span>
               {fileFormat === 'csv' ? (
-                <CheckCircle2 className="w-5 h-5 text-[#2357A4] fill-blue-50" />
+                <CheckCircle2 className="w-5 h-5 text-[#2357A4] dark:text-blue-400" />
               ) : (
-                <div className="w-5 h-5 rounded-full border-2 border-slate-300" />
+                <div className="w-5 h-5 rounded-full border-2 border-slate-300 dark:border-slate-600" />
               )}
             </button>
 
@@ -126,42 +125,42 @@ export const ExportScreen: React.FC<ExportScreenProps> = ({ transactions, settin
               onClick={() => setFileFormat('pdf')}
               className={`p-4 rounded-2xl flex items-center justify-between transition border-2 ${
                 fileFormat === 'pdf'
-                  ? 'border-[#2357A4] bg-blue-50/20 shadow-xs'
-                  : 'border-slate-200 bg-white hover:border-slate-300'
+                  ? 'border-[#2357A4] dark:border-blue-400 bg-blue-50/20 dark:bg-blue-950/30 shadow-xs'
+                  : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 hover:border-slate-300 dark:hover:border-slate-600'
               }`}
             >
-              <span className="font-semibold text-sm text-slate-900">PDF</span>
+              <span className="font-semibold text-sm text-slate-900 dark:text-slate-100">PDF</span>
               {fileFormat === 'pdf' ? (
-                <CheckCircle2 className="w-5 h-5 text-[#2357A4] fill-blue-50" />
+                <CheckCircle2 className="w-5 h-5 text-[#2357A4] dark:text-blue-400" />
               ) : (
-                <div className="w-5 h-5 rounded-full border-2 border-slate-300" />
+                <div className="w-5 h-5 rounded-full border-2 border-slate-300 dark:border-slate-600" />
               )}
             </button>
           </div>
 
-          <p className="text-xs text-slate-500 mt-2">
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-2">
             {fileFormat === 'csv'
               ? 'CSV works with Excel and Google Sheets.'
               : 'PDF is formatted for sharing, archiving, and printing.'}
           </p>
         </div>
 
-        {/* Summary Card matching Figma screen 7 */}
-        <div className="bg-[#EDF2F7]/70 rounded-2xl p-5 border border-slate-200/50">
-          <div className="text-[15px] font-bold text-slate-900">
+        {/* Summary Card */}
+        <div className="bg-[#EDF2F7]/70 dark:bg-slate-800/80 rounded-2xl p-5 border border-slate-200/50 dark:border-slate-700">
+          <div className="text-[15px] font-bold text-slate-900 dark:text-slate-100">
             {filtered.length} {filtered.length === 1 ? 'transaction' : 'transactions'}
           </div>
-          <div className="text-xs text-slate-500 mt-1">
+          <div className="text-xs text-slate-500 dark:text-slate-400 mt-1">
             {getDateSpanLabel()}
           </div>
         </div>
 
-        <p className="text-xs text-slate-400 leading-relaxed">
+        <p className="text-xs text-slate-400 dark:text-slate-500 leading-relaxed">
           Only your transaction details are included. Choose where to save or share your file next.
         </p>
 
         {successMessage && (
-          <div className="p-3 bg-emerald-50 text-emerald-700 text-xs font-medium rounded-xl border border-emerald-200 animate-in fade-in">
+          <div className="p-3 bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 text-xs font-medium rounded-xl border border-emerald-200 dark:border-emerald-800 animate-in fade-in">
             {successMessage}
           </div>
         )}

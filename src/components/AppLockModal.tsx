@@ -44,19 +44,18 @@ export const AppLockModal: React.FC<AppLockModalProps> = ({
   };
 
   const handleBiometrics = () => {
-    // Quick biometric unlock shortcut
     onUnlock();
     setPin('');
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-md">
-      <div className="w-full max-w-xs bg-white rounded-3xl p-6 shadow-2xl text-center border border-slate-100 animate-in fade-in zoom-in-95">
-        <div className="w-12 h-12 rounded-full bg-blue-50 text-[#2357A4] flex items-center justify-center mx-auto mb-3">
+      <div className="w-full max-w-xs bg-white dark:bg-slate-800 rounded-3xl p-6 shadow-2xl text-center border border-slate-100 dark:border-slate-700 animate-in fade-in zoom-in-95">
+        <div className="w-12 h-12 rounded-full bg-blue-50 dark:bg-blue-950/60 text-[#2357A4] dark:text-blue-400 flex items-center justify-center mx-auto mb-3">
           <Lock className="w-6 h-6 stroke-[2]" />
         </div>
-        <h2 className="text-lg font-bold text-slate-900">Busy Bees Locked</h2>
-        <p className="text-xs text-slate-500 mt-1">Enter your 4-digit PIN (default: 1234)</p>
+        <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Busy Bees Locked</h2>
+        <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">Enter your 4-digit PIN (default: 1234)</p>
 
         {/* PIN dots */}
         <div className="flex justify-center gap-3 my-6">
@@ -65,10 +64,10 @@ export const AppLockModal: React.FC<AppLockModalProps> = ({
               key={idx}
               className={`w-3.5 h-3.5 rounded-full transition-all duration-200 ${
                 pin.length > idx
-                  ? 'bg-[#2357A4] scale-110'
+                  ? 'bg-[#2357A4] dark:bg-blue-400 scale-110'
                   : error
                   ? 'bg-rose-400'
-                  : 'bg-slate-200'
+                  : 'bg-slate-200 dark:bg-slate-700'
               }`}
             />
           ))}
@@ -87,7 +86,7 @@ export const AppLockModal: React.FC<AppLockModalProps> = ({
               key={digit}
               type="button"
               onClick={() => handleDigit(digit)}
-              className="h-12 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-900 font-semibold text-lg active:scale-95 transition"
+              className="h-12 rounded-2xl bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-900 dark:text-slate-100 font-semibold text-lg active:scale-95 transition"
             >
               {digit}
             </button>
@@ -96,14 +95,14 @@ export const AppLockModal: React.FC<AppLockModalProps> = ({
             type="button"
             onClick={handleBiometrics}
             title="Biometric unlock"
-            className="h-12 rounded-2xl bg-blue-50 hover:bg-blue-100 text-[#2357A4] flex items-center justify-center active:scale-95 transition"
+            className="h-12 rounded-2xl bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 text-[#2357A4] dark:text-blue-400 flex items-center justify-center active:scale-95 transition"
           >
             <Fingerprint className="w-6 h-6" />
           </button>
           <button
             type="button"
             onClick={() => handleDigit('0')}
-            className="h-12 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-900 font-semibold text-lg active:scale-95 transition"
+            className="h-12 rounded-2xl bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-900 dark:text-slate-100 font-semibold text-lg active:scale-95 transition"
           >
             0
           </button>
@@ -111,7 +110,7 @@ export const AppLockModal: React.FC<AppLockModalProps> = ({
             type="button"
             onClick={handleDelete}
             title="Backspace"
-            className="h-12 rounded-2xl bg-slate-100 hover:bg-slate-200 text-slate-600 flex items-center justify-center active:scale-95 transition"
+            className="h-12 rounded-2xl bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-300 flex items-center justify-center active:scale-95 transition"
           >
             <Delete className="w-5 h-5" />
           </button>

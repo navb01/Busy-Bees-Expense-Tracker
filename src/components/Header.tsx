@@ -16,20 +16,8 @@ export const Header: React.FC<HeaderProps> = ({
   title,
   onBack,
   onOpenDrawer,
-  onOpenProfile,
-  profile,
 }) => {
   const isDashboard = currentScreen === 'dashboard';
-
-  // Compute initials from profile name or default to 'BB'
-  const getInitials = () => {
-    if (!profile.name || profile.name.trim() === '') return 'BB';
-    const parts = profile.name.trim().split(/\s+/);
-    if (parts.length >= 2) {
-      return (parts[0][0] + parts[1][0]).toUpperCase();
-    }
-    return profile.name.substring(0, 2).toUpperCase();
-  };
 
   const getScreenTitle = () => {
     if (title) return title;
@@ -54,14 +42,17 @@ export const Header: React.FC<HeaderProps> = ({
     }
   };
 
+  const screenTitle = getScreenTitle();
+  const isBrandTitle = screenTitle === 'Busy Bees Expense Tracker';
+
   return (
-    <header className="sticky top-0 z-30 flex items-center justify-between px-5 py-4 bg-slate-50/95 backdrop-blur-sm border-b border-slate-100">
-      <div className="flex items-center gap-3">
+    <header className="sticky top-0 z-30 flex items-center justify-between px-5 py-4 bg-slate-50/95 dark:bg-slate-900/95 backdrop-blur-sm border-b border-slate-100 dark:border-slate-800 transition-colors">
+      <div className="flex items-center gap-3 min-w-0">
         {isDashboard ? (
           <button
             onClick={onOpenDrawer}
             aria-label="Open menu"
-            className="p-2 -ml-2 text-slate-700 hover:text-slate-900 active:scale-95 transition rounded-lg hover:bg-slate-200/50"
+            className="p-2 -ml-2 text-slate-700 dark:text-slate-200 hover:text-slate-900 dark:hover:text-white active:scale-95 transition rounded-lg hover:bg-slate-200/50 dark:hover:bg-slate-800 shrink-0"
           >
             <Menu className="w-6 h-6 stroke-[2.2]" />
           </button>
@@ -69,26 +60,26 @@ export const Header: React.FC<HeaderProps> = ({
           <button
             onClick={onBack}
             aria-label="Go back"
-            className="p-2 -ml-2 text-slate-700 hover:text-slate-900 active:scale-95 transition rounded-lg hover:bg-slate-200/50"
+            className="p-2 -ml-2 text-slate-700 dark:text-slate-200 hover:text-slate-900 dark:hover:text-white active:scale-95 transition rounded-lg hover:bg-slate-200/50 dark:hover:bg-slate-800 shrink-0"
           >
             <ArrowLeft className="w-5 h-5 stroke-[2.2]" />
           </button>
         )}
 
         <h1
-          className={`text-slate-900 text-lg leading-tight ${
-            isDashboard
-              ? 'font-bold tracking-tight font-heading'
-              : 'font-semibold'
+          className={`text-slate-900 dark:text-slate-100 leading-tight truncate ${
+            isBrandTitle
+              ? 'font-brand text-[17px] sm:text-[19px] tracking-wide'
+              : 'font-semibold text-lg'
           }`}
         >
-          {getScreenTitle()}
+          {screenTitle}
         </h1>
       </div>
 
-      {/* Busy Bees "BB" Logo Badge as designed in Figma */}
+      {/* Busy Bees "BB" Logo Badge */}
       <div
-        className="w-10 h-10 rounded-full border-2 border-[#2357A4] flex items-center justify-center text-[#2357A4] font-bold text-sm bg-white shadow-xs select-none shrink-0"
+        className="w-10 h-10 rounded-full border-2 border-[#2357A4] dark:border-blue-400 flex items-center justify-center text-[#2357A4] dark:text-blue-400 font-bold text-sm bg-white dark:bg-slate-800 shadow-xs select-none shrink-0 ml-2"
         aria-label="Busy Bees Logo"
         title="Busy Bees Expense Tracker"
       >
