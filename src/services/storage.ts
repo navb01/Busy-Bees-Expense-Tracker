@@ -8,9 +8,10 @@ const STORAGE_KEYS = {
   LAST_ACTIVE: 'bb_last_active_time',
   LAST_NOTIFIED: 'bb_last_notified_time',
   INSTALLED_AT: 'bb_installed_at_v1',
+  ONBOARDED: 'bb_onboarded_v1',
 };
 
-const CURRENT_STORAGE_VERSION = 3;
+const CURRENT_STORAGE_VERSION = 4;
 
 export const DEFAULT_PROFILE: UserProfile = {
   name: '',
@@ -50,10 +51,29 @@ class StorageService {
         localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(DEFAULT_SETTINGS));
         localStorage.setItem(STORAGE_KEYS.LAST_ACTIVE, String(Date.now()));
         localStorage.setItem(STORAGE_KEYS.INSTALLED_AT, getTodayISO());
+        localStorage.setItem(STORAGE_KEYS.ONBOARDED, 'false');
       }
       this.initialized = true;
     } catch (e) {
       console.warn('LocalStorage not accessible or error initializing', e);
+    }
+  }
+
+  isOnboarded(): boolean {
+    this.init();
+    try {
+      return localStorage.getItem(STORAGE_KEYS.ONBOARDED) === 'true';
+    } catch {
+      return false;
+    }
+  }
+
+  setOnboarded(value: boolean): void {
+    this.init();
+    try {
+      localStorage.setItem(STORAGE_KEYS.ONBOARDED, value ? 'true' : 'false');
+    } catch {
+      // ignore
     }
   }
 

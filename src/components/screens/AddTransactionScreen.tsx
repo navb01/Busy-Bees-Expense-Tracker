@@ -162,8 +162,8 @@ export const AddTransactionScreen: React.FC<AddTransactionScreenProps> = ({
       return;
     }
 
-    // 2. If this is an expense and it causes the balance to become negative (Dr.), show debit warning popup
-    if (type === 'expense') {
+    // 2. If this is a non-backdated (current date) expense and it causes the balance to become negative (Dr.), show debit warning popup (#16 & #19)
+    if (type === 'expense' && date >= todayISO) {
       const balanceBefore = getMonthBalanceBeforeEntry(date);
       const balanceAfter = balanceBefore - parsedAmount;
       if (balanceAfter < 0) {
@@ -176,7 +176,7 @@ export const AddTransactionScreen: React.FC<AddTransactionScreenProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col justify-between px-6 py-6 max-w-lg mx-auto w-full overflow-y-auto">
+    <div className="flex-1 flex flex-col justify-between px-6 pt-6 pb-12 sm:pb-6 max-w-lg mx-auto w-full overflow-y-auto">
       <div className="space-y-6">
         {/* Amount section */}
         <div className="text-center pt-2 pb-4">
@@ -386,13 +386,8 @@ export const AddTransactionScreen: React.FC<AddTransactionScreenProps> = ({
                   setPendingBackdatedDate(null);
                   if (confirmOnSaveModal) {
                     setConfirmOnSaveModal(false);
-                    const balanceBefore = getMonthBalanceBeforeEntry(targetDate);
-                    const balanceAfter = balanceBefore - parsedAmount;
-                    if (type === 'expense' && balanceAfter < 0) {
-                      setDebitWarningModalOpen(true);
-                    } else {
-                      commitSave(targetDate);
-                    }
+                    // Backdated entries do not require the Dr. balance warning (#19)
+                    commitSave(targetDate);
                   }
                 }}
                 className="flex-1 py-2.5 rounded-xl bg-[#2357A4] hover:bg-[#1D4A8C] text-white text-sm font-semibold transition"

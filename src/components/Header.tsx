@@ -46,8 +46,8 @@ export const Header: React.FC<HeaderProps> = ({
   const isBrandTitle = screenTitle === 'Busy Bees Expense Tracker';
 
   return (
-    <header className="sticky top-0 z-30 flex items-center justify-between px-5 py-4 bg-slate-50/95 dark:bg-slate-900/95 backdrop-blur-sm border-b border-slate-100 dark:border-slate-800 transition-colors">
-      <div className="flex items-center gap-3 min-w-0">
+    <header className="sticky top-0 z-30 flex items-center justify-between px-5 pt-10 pb-3.5 sm:py-4 bg-slate-50/95 dark:bg-slate-900/95 backdrop-blur-sm border-b border-slate-100 dark:border-slate-800 transition-colors">
+      <div className="flex items-center gap-2.5 min-w-0">
         {isDashboard ? (
           <button
             onClick={onOpenDrawer}
@@ -69,7 +69,7 @@ export const Header: React.FC<HeaderProps> = ({
         <h1
           className={`text-slate-900 dark:text-slate-100 leading-tight truncate ${
             isBrandTitle
-              ? 'font-brand text-[17px] sm:text-[19px] tracking-wide'
+              ? 'font-brand text-[15.5px] sm:text-[18px] tracking-wide'
               : 'font-semibold text-lg'
           }`}
         >

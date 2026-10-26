@@ -6,18 +6,25 @@ interface DrawerProps {
   isOpen: boolean;
   onClose: () => void;
   onNavigate: (screen: ScreenType) => void;
+  onRequestExit: () => void;
 }
 
 export const Drawer: React.FC<DrawerProps> = ({
   isOpen,
   onClose,
   onNavigate,
+  onRequestExit,
 }) => {
   if (!isOpen) return null;
 
   const handleItemClick = (screen: ScreenType) => {
     onClose();
     onNavigate(screen);
+  };
+
+  const handleExitClick = () => {
+    onClose();
+    onRequestExit();
   };
 
   return (
@@ -30,8 +37,8 @@ export const Drawer: React.FC<DrawerProps> = ({
 
       {/* Drawer content */}
       <div className="relative z-10 w-[80%] max-w-xs h-full bg-white dark:bg-slate-900 shadow-2xl flex flex-col animate-in slide-in-from-left duration-200 border-r border-transparent dark:border-slate-800">
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 pt-6 pb-6">
+        {/* Header with top margin below phone status bar */}
+        <div className="flex items-center justify-between px-6 pt-11 pb-5 sm:pt-6 sm:pb-6">
           <h2 className="text-xl font-brand text-slate-900 dark:text-slate-100 leading-snug tracking-wide">
             Busy Bees Expense
             <br />
@@ -81,7 +88,7 @@ export const Drawer: React.FC<DrawerProps> = ({
           </button>
 
           <button
-            onClick={() => handleItemClick('exit')}
+            onClick={handleExitClick}
             className="w-full flex items-center gap-4 px-4 py-3.5 text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-xl transition font-medium text-[15px]"
           >
             <LogOut className="w-5 h-5 text-slate-600 dark:text-slate-400 stroke-[1.8]" />
@@ -89,8 +96,8 @@ export const Drawer: React.FC<DrawerProps> = ({
           </button>
         </div>
 
-        {/* Footer */}
-        <div className="px-6 py-6 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50">
+        {/* Footer with bottom safe padding above system navigation bar */}
+        <div className="px-6 pt-5 pb-10 sm:py-6 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50">
           <p className="text-xs text-slate-500 dark:text-slate-400 font-normal">A little clarity, every day.</p>
           <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">Version 1.0.0</p>
         </div>
