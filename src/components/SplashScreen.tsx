@@ -2,7 +2,7 @@ import React from 'react';
 
 export const SplashScreen: React.FC = () => {
   return (
-    <div className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-slate-50 select-none animate-in fade-in duration-300">
+    <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-slate-50 select-none animate-in fade-in duration-300">
       <div className="flex flex-col items-center">
         {/* Centered Logo Badge (3x bigger: 240px) matching Figma */}
         <div className="relative w-56 h-56 sm:w-60 sm:h-60 rounded-full border-[8px] border-[#2357A4] flex items-center justify-center bg-white shadow-xl">

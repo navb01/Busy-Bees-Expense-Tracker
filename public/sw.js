@@ -41,7 +41,16 @@ self.addEventListener('fetch', (event) => {
   // Only handle GET requests
   if (event.request.method !== 'GET') return;
 
-  const url = new URL(event.request.url);
+  // Never intercept dev requests, Vite modules, or AI Studio preview
+  if (
+    self.location.hostname === 'localhost' ||
+    self.location.hostname.includes('ais-dev') ||
+    url.pathname.startsWith('/@') ||
+    url.pathname.startsWith('/src/') ||
+    url.pathname.startsWith('/node_modules/')
+  ) {
+    return;
+  }
 
   // Ignore chrome-extension or external analytics
   if (url.origin !== self.location.origin && !url.hostname.includes('googleapis.com') && !url.hostname.includes('gstatic.com')) {

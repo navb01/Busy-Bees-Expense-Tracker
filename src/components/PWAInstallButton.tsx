@@ -1,11 +1,65 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Download, Share2, PlusSquare, X } from 'lucide-react';
-import { usePWAInstall } from '../hooks/usePWAInstall';
+
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>;
+}
 
 export const PWAInstallButton: React.FC = () => {
-  const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
+  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
+  const [isInstalled, setIsInstalled] = useState(false);
+  const [isIOS, setIsIOS] = useState(false);
   const [showIOSGuide, setShowIOSGuide] = useState(false);
   const [dismissed, setDismissed] = useState(false);
+
+  useEffect(() => {
+    try {
+      if (typeof window === 'undefined') return;
+
+      const isStandalone =
+        window.matchMedia('(display-mode: standalone)').matches ||
+        (window.navigator as unknown as { standalone?: boolean }).standalone === true;
+      setIsInstalled(isStandalone);
+
+      const ua = window.navigator.userAgent.toLowerCase();
+      setIsIOS(/iphone|ipad|ipod/.test(ua));
+
+      const handlePrompt = (e: Event) => {
+        e.preventDefault();
+        setDeferredPrompt(e as BeforeInstallPromptEvent);
+      };
+
+      const handleInstalled = () => {
+        setIsInstalled(true);
+        setDeferredPrompt(null);
+      };
+
+      window.addEventListener('beforeinstallprompt', handlePrompt);
+      window.addEventListener('appinstalled', handleInstalled);
+
+      return () => {
+        window.removeEventListener('beforeinstallprompt', handlePrompt);
+        window.removeEventListener('appinstalled', handleInstalled);
+      };
+    } catch {
+      // Ignore if not supported in iframe/environment
+    }
+  }, []);
+
+  const handleInstall = async () => {
+    if (!deferredPrompt) return;
+    try {
+      await deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      if (outcome === 'accepted') {
+        setIsInstalled(true);
+        setDeferredPrompt(null);
+      }
+    } catch {
+      // Ignore
+    }
+  };
 
   if (isInstalled || dismissed) {
     return null;
@@ -13,7 +67,7 @@ export const PWAInstallButton: React.FC = () => {
 
   return (
     <>
-      {/* Banner prompt on top or bottom */}
+      {/* Banner prompt on top */}
       <div className="bg-blue-50/90 border-b border-blue-100 px-4 py-2 flex items-center justify-between text-xs text-blue-900 transition animate-in fade-in">
         <div className="flex items-center gap-2 truncate pr-2">
           <span className="font-semibold">📱 Install Busy Bees</span>
@@ -21,9 +75,9 @@ export const PWAInstallButton: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
-          {isInstallable && (
+          {deferredPrompt && (
             <button
-              onClick={install}
+              onClick={handleInstall}
               className="flex items-center gap-1.5 px-2.5 py-1 bg-[#2357A4] text-white font-medium rounded-lg hover:bg-[#1D4A8C] transition active:scale-95"
             >
               <Download className="w-3.5 h-3.5" />
