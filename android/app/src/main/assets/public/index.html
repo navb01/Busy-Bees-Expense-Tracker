@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+    <title>Busy Bees Expense Tracker</title>
+    <meta name="description" content="A simple place for your everyday money. Record what comes in and what goes out, without the noise." />
+    <meta property="og:title" content="Busy Bees Expense Tracker" />
+    <meta property="og:description" content="A simple place for your everyday money. Record what comes in and what goes out, without the noise." />
+    <meta property="og:type" content="website" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="theme-color" content="#2563EB" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="BusyBees" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/svg+xml" href="/icon.svg" />
+    <link rel="manifest" href="/manifest.json" />
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register('/sw.js', { scope: '/' })
+            .then(function(reg) {
+              console.log('Busy Bees Service Worker active:', reg.scope);
+            })
+            .catch(function(err) {
+              console.warn('Service Worker registration failed:', err);
+            });
+        });
+      }
+    </script>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <style>.bb-splash{-webkit-user-select:none;user-select:none;background-color:#f8fafc;flex-direction:column;justify-content:center;align-items:center;display:flex;position:fixed;inset:0}.bb-logo{background-color:#fff;border:8px solid #2357a4;border-radius:9999px;justify-content:center;align-items:center;width:240px;height:240px;display:flex;position:relative;box-shadow:0 10px 25px -5px #0000001a}.bb-logo-text{color:#2357a4;letter-spacing:-1.5px;font-family:system-ui,-apple-system,BlinkMacSystemFont,Segoe UI,Roboto,sans-serif;font-size:76px;font-weight:800}.bb-logo-dot{background-color:#f59e0b;border:3px solid #fff;border-radius:9999px;width:44px;height:44px;position:absolute;top:6px;right:6px}.bb-dots{align-items:center;gap:10px;margin-top:48px;display:flex}.bb-dots span{background-color:#2357a4;border-radius:9999px;width:12px;height:12px;animation:.9s ease-in-out infinite bb-bounce}.bb-dots span:nth-child(2){animation-delay:.2s}.bb-dots span:nth-child(3){animation-delay:.4s}@keyframes bb-bounce{0%,80%,to{transform:translateY(0)}40%{transform:translateY(-8px)}}</style>
+    <script type="module" crossorigin src="/assets/index-Chypeg1C.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-CcfVJmqU.css">
+  <link rel="manifest" href="/manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="/registerSW.js"></script></head>
+  <body class="bg-slate-50 text-slate-900 antialiased selection:bg-blue-100 selection:text-blue-900">
+    <div id="root">
+      <div class="bb-splash">
+        <div class="bb-logo">
+          <span class="bb-logo-text">BB</span>
+          <span class="bb-logo-dot"></span>
+        </div>
+        <div class="bb-dots">
+          <span></span>
+          <span></span>
+          <span></span>
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
+

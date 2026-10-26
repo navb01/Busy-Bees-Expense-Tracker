@@ -1,0 +1,6 @@
+{
+  "name": "Busy Bees Expense Tracker",
+  "description": "A simple, lightweight offline expense and income tracker for iOS and Android with local storage, 24h reminders, and export capabilities.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

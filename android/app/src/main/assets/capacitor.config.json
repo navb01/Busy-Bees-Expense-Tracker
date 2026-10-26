@@ -1,0 +1,5 @@
+{
+	"appId": "com.busybees.expensetracker",
+	"appName": "Busy Bees Expense Tracker",
+	"webDir": "dist"
+}
