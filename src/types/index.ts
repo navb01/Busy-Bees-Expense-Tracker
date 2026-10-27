@@ -35,9 +35,21 @@ export interface AppSettings {
   appearance: AppearanceMode;
   appLock: boolean;
   pinCode: string;
+  customPinSet?: boolean;
+  biometricEnabled?: boolean;
   inactivityReminder: boolean;
   lastActiveTimestamp: number;
   notificationsEnabled: boolean;
+}
+
+export type BackupFrequency = 'Never' | 'Only when I tap "Back up"' | 'Daily' | 'Weekly' | 'Monthly';
+
+export interface LocalBackupMetadata {
+  lastBackupTime: number | null;
+  lastBackupSize: number | null;
+  lastBackupTxCount: number | null;
+  googleEmail: string;
+  frequency: BackupFrequency;
 }
 
 export type ScreenType =
@@ -46,6 +58,7 @@ export type ScreenType =
   | 'add-expense'
   | 'edit-transaction'
   | 'settings'
+  | 'backup'
   | 'export'
   | 'about'
   | 'profile'

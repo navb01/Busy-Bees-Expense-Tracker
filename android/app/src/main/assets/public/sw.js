@@ -90,7 +90,7 @@ define(['./workbox-7e5eb42b'], (function (workbox) { 'use strict';
     "revision": "5282fff2638bf1eff1fcdd6516f8f8fc"
   }, {
     "url": "index.html",
-    "revision": "26ae80604d28567f4aeb99e339ea6b11"
+    "revision": "d4cb0bed83aca6f0400329128ea2d51f"
   }, {
     "url": "icon.svg",
     "revision": "885a09fc26694e0c9ec1ec7ece7fff5e"
@@ -101,10 +101,10 @@ define(['./workbox-7e5eb42b'], (function (workbox) { 'use strict';
     "url": "fonts/PermanentMarker-Regular.woff2",
     "revision": "1b66ccb164151a6cf698667c8b570cc6"
   }, {
-    "url": "assets/index-Drgf8ffb.css",
+    "url": "assets/index-DPIqD1_N.js",
     "revision": null
   }, {
-    "url": "assets/index-DBLTFZA-.js",
+    "url": "assets/index-0NW7vOQa.css",
     "revision": null
   }, {
     "url": "assets/aistudio/error4_d204b4cb.png",

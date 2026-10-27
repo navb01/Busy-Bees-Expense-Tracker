@@ -29,6 +29,8 @@ export const Header: React.FC<HeaderProps> = ({
         return 'Busy Bees Expense Tracker';
       case 'settings':
         return 'Settings';
+      case 'backup':
+        return 'Backup & Restore';
       case 'export':
         return 'Export';
       case 'about':

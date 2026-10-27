@@ -1,4 +1,4 @@
-import { AppSettings, Transaction, UserProfile } from '../types';
+import { AppSettings, LocalBackupMetadata, Transaction, UserProfile } from '../types';
 
 const STORAGE_KEYS = {
   VERSION: 'bb_storage_version',
@@ -9,6 +9,7 @@ const STORAGE_KEYS = {
   LAST_NOTIFIED: 'bb_last_notified_time',
   INSTALLED_AT: 'bb_installed_at_v1',
   ONBOARDED: 'bb_onboarded_v1',
+  BACKUP_META: 'bb_gdrive_backup_meta_v1',
 };
 
 const CURRENT_STORAGE_VERSION = 4;
@@ -25,11 +26,31 @@ export const DEFAULT_SETTINGS: AppSettings = {
   weekStartsOn: 'Monday',
   appearance: 'Light',
   appLock: false,
-  pinCode: '1234',
+  pinCode: '',
+  customPinSet: false,
+  biometricEnabled: true,
   inactivityReminder: true,
   lastActiveTimestamp: Date.now(),
   notificationsEnabled: false,
 };
+
+export const DEFAULT_BACKUP_META: LocalBackupMetadata = {
+  lastBackupTime: null,
+  lastBackupSize: null,
+  lastBackupTxCount: null,
+  googleEmail: '',
+  frequency: 'Only when I tap "Back up"',
+};
+
+export interface AppBackupSnapshot {
+  app: 'busy-bees-expense-tracker';
+  schemaVersion: number;
+  createdAt: number;
+  installedAt: string;
+  transactions: Transaction[];
+  profile: UserProfile;
+  settings: AppSettings;
+}
 
 export const getTodayISO = (): string => {
   const d = new Date();
@@ -223,6 +244,11 @@ class StorageService {
       if (parsed.appearance !== 'Light' && parsed.appearance !== 'Dark') {
         parsed.appearance = 'Light';
       }
+      // If legacy default '1234' was stored before user ever created a custom PIN, clear it
+      if (!parsed.customPinSet) {
+        parsed.pinCode = '';
+        parsed.appLock = false;
+      }
       return { ...DEFAULT_SETTINGS, ...parsed };
     } catch {
       return DEFAULT_SETTINGS;
@@ -239,6 +265,86 @@ class StorageService {
       console.error('Failed to save settings', e);
     }
     return updated;
+  }
+
+  getBackupMeta(): LocalBackupMetadata {
+    this.init();
+    try {
+      const data = localStorage.getItem(STORAGE_KEYS.BACKUP_META);
+      if (!data) return DEFAULT_BACKUP_META;
+      return { ...DEFAULT_BACKUP_META, ...JSON.parse(data) };
+    } catch {
+      return DEFAULT_BACKUP_META;
+    }
+  }
+
+  saveBackupMeta(updates: Partial<LocalBackupMetadata>): LocalBackupMetadata {
+    const current = this.getBackupMeta();
+    const updated: LocalBackupMetadata = { ...current, ...updates };
+    try {
+      localStorage.setItem(STORAGE_KEYS.BACKUP_META, JSON.stringify(updated));
+    } catch (e) {
+      console.error('Failed to save backup metadata', e);
+    }
+    return updated;
+  }
+
+  getFullBackupSnapshot(): AppBackupSnapshot {
+    this.init();
+    const installInfo = this.getInstallDate();
+    return {
+      app: 'busy-bees-expense-tracker',
+      schemaVersion: CURRENT_STORAGE_VERSION,
+      createdAt: Date.now(),
+      installedAt: installInfo.iso,
+      transactions: this.getTransactions(),
+      profile: this.getProfile(),
+      settings: this.getSettings(),
+    };
+  }
+
+  restoreFullBackupSnapshot(snapshot: AppBackupSnapshot): {
+    transactions: Transaction[];
+    profile: UserProfile;
+    settings: AppSettings;
+  } {
+    this.init();
+    const validTransactions = Array.isArray(snapshot.transactions)
+      ? snapshot.transactions.filter((t) => t && typeof t.id === 'string' && !t.id.startsWith('tx_seed_'))
+      : [];
+    const validProfile: UserProfile = {
+      ...DEFAULT_PROFILE,
+      ...(snapshot.profile || {}),
+    };
+    const validSettings: AppSettings = {
+      ...DEFAULT_SETTINGS,
+      ...(snapshot.settings || {}),
+      appearance:
+        snapshot.settings?.appearance === 'Dark' ? 'Dark' : 'Light',
+    };
+
+    this.saveTransactions(validTransactions);
+    this.saveProfile(validProfile);
+    this.saveSettings(validSettings);
+
+    try {
+      let earliestIso = snapshot.installedAt || getTodayISO();
+      for (const tx of validTransactions) {
+        if (tx.date && tx.date < earliestIso) {
+          earliestIso = tx.date;
+        }
+      }
+      localStorage.setItem(STORAGE_KEYS.INSTALLED_AT, earliestIso);
+      localStorage.setItem(STORAGE_KEYS.ONBOARDED, 'true');
+    } catch {
+      // ignore
+    }
+
+    return {
+      transactions: validTransactions,
+      profile: validProfile,
+      settings: validSettings,
+    };
   }
 
   recordActivity(): void {
@@ -272,3 +378,4 @@ class StorageService {
 }
 
 export const storage = new StorageService();
+

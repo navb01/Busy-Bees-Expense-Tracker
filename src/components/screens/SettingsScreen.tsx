@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { ChevronRight, Bell, Check } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { ChevronRight, Bell, Check, Cloud, Lock, Fingerprint, KeyRound, Delete } from 'lucide-react';
 import {
   AppearanceMode,
   AppSettings,
@@ -8,28 +8,224 @@ import {
   WeekStartDay,
 } from '../../types';
 import { notificationService } from '../../services/notifications';
+import { storage } from '../../services/storage';
+import { formatBackupTimestamp } from '../../services/googleDriveBackup';
+import { authenticateWithBiometrics, isBiometricSupported } from '../../services/biometricAuth';
 
 interface SettingsScreenProps {
   settings: AppSettings;
   onUpdateSettings: (updates: Partial<AppSettings>) => void;
+  onOpenBackup?: () => void;
+  onShowToast?: (msg: string) => void;
 }
+
+type PinModalMode =
+  | null
+  | 'setup-create'
+  | 'setup-confirm'
+  | 'verify-disable'
+  | 'verify-change'
+  | 'change-create'
+  | 'change-confirm';
 
 export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   settings,
   onUpdateSettings,
+  onOpenBackup,
+  onShowToast,
 }) => {
   const [currencyModalOpen, setCurrencyModalOpen] = useState(false);
   const [appearanceModalOpen, setAppearanceModalOpen] = useState(false);
 
+  // PIN Setup / Change / Verify Modal state
+  const [pinModalMode, setPinModalMode] = useState<PinModalMode>(null);
+  const [pinInput, setPinInput] = useState('');
+  const [firstPinDraft, setFirstPinDraft] = useState('');
+  const [pinError, setPinError] = useState<string | null>(null);
+  const [biometricSupported, setBiometricSupported] = useState(false);
+  const [biometricStatus, setBiometricStatus] = useState<'AVAILABLE' | 'NONE_ENROLLED' | 'UNAVAILABLE'>('UNAVAILABLE');
+
   const currentCurrency = CURRENCY_CONFIGS[settings.currency] || CURRENCY_CONFIGS.INR;
+  const backupMeta = storage.getBackupMeta();
+
+  useEffect(() => {
+    let mounted = true;
+    isBiometricSupported().then((res) => {
+      if (!mounted) return;
+      setBiometricSupported(res.available);
+      setBiometricStatus(res.status);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   const toggleWeekStartsOn = () => {
     const next: WeekStartDay = settings.weekStartsOn === 'Monday' ? 'Sunday' : 'Monday';
     onUpdateSettings({ weekStartsOn: next });
   };
 
+  const openPinModal = (mode: PinModalMode) => {
+    setPinModalMode(mode);
+    setPinInput('');
+    setFirstPinDraft('');
+    setPinError(null);
+  };
+
+  const closePinModal = () => {
+    setPinModalMode(null);
+    setPinInput('');
+    setFirstPinDraft('');
+    setPinError(null);
+  };
+
   const toggleAppLock = () => {
-    onUpdateSettings({ appLock: !settings.appLock });
+    if (!settings.appLock) {
+      // Turning App Lock ON -> always ask user to set their 4-digit PIN
+      openPinModal('setup-create');
+    } else {
+      // Turning App Lock OFF -> verify current PIN or Biometric first
+      openPinModal('verify-disable');
+    }
+  };
+
+  const handleStartChangePin = () => {
+    openPinModal('verify-change');
+  };
+
+  const toggleBiometricUnlock = async () => {
+    const currentBio = settings.biometricEnabled !== false;
+    if (!currentBio) {
+      // Turning ON biometric unlock -> verify biometric works on this device
+      const support = await isBiometricSupported();
+      if (!support.available) {
+        onShowToast?.(
+          support.status === 'NONE_ENROLLED'
+            ? 'Please enroll a fingerprint or face lock in your phone settings first'
+            : 'Biometric sensor is not available on this device'
+        );
+        return;
+      }
+      const res = await authenticateWithBiometrics();
+      if (res.success) {
+        onUpdateSettings({ biometricEnabled: true });
+        onShowToast?.('Biometric unlock enabled');
+      } else if (!res.cancelled && res.error) {
+        onShowToast?.(res.error);
+      }
+    } else {
+      onUpdateSettings({ biometricEnabled: false });
+      onShowToast?.('Biometric unlock turned off');
+    }
+  };
+
+  const handlePinDigit = (digit: string) => {
+    if (pinInput.length >= 4) return;
+    const nextPin = pinInput + digit;
+    setPinInput(nextPin);
+    setPinError(null);
+
+    if (nextPin.length === 4) {
+      window.setTimeout(() => {
+        processCompletedPin(nextPin);
+      }, 150);
+    }
+  };
+
+  const processCompletedPin = (enteredPin: string) => {
+    if (pinModalMode === 'setup-create') {
+      setFirstPinDraft(enteredPin);
+      setPinInput('');
+      setPinError(null);
+      setPinModalMode('setup-confirm');
+      return;
+    }
+
+    if (pinModalMode === 'setup-confirm') {
+      if (enteredPin !== firstPinDraft) {
+        setPinError('PINs did not match. Please try again.');
+        setPinInput('');
+        setFirstPinDraft('');
+        setPinModalMode('setup-create');
+        return;
+      }
+      onUpdateSettings({
+        appLock: true,
+        pinCode: enteredPin,
+        customPinSet: true,
+        biometricEnabled: true,
+      });
+      closePinModal();
+      onShowToast?.('App Lock enabled with your 4-digit PIN');
+      return;
+    }
+
+    if (pinModalMode === 'verify-disable') {
+      if (enteredPin === settings.pinCode) {
+        onUpdateSettings({ appLock: false });
+        closePinModal();
+        onShowToast?.('App Lock turned off');
+      } else {
+        setPinError('Incorrect PIN. Please try again.');
+        setPinInput('');
+      }
+      return;
+    }
+
+    if (pinModalMode === 'verify-change') {
+      if (enteredPin === settings.pinCode) {
+        setPinInput('');
+        setPinError(null);
+        setPinModalMode('change-create');
+      } else {
+        setPinError('Incorrect current PIN. Please try again.');
+        setPinInput('');
+      }
+      return;
+    }
+
+    if (pinModalMode === 'change-create') {
+      setFirstPinDraft(enteredPin);
+      setPinInput('');
+      setPinError(null);
+      setPinModalMode('change-confirm');
+      return;
+    }
+
+    if (pinModalMode === 'change-confirm') {
+      if (enteredPin !== firstPinDraft) {
+        setPinError('New PINs did not match. Please enter your new PIN again.');
+        setPinInput('');
+        setFirstPinDraft('');
+        setPinModalMode('change-create');
+        return;
+      }
+      onUpdateSettings({
+        appLock: true,
+        pinCode: enteredPin,
+        customPinSet: true,
+      });
+      closePinModal();
+      onShowToast?.('App Lock PIN updated');
+    }
+  };
+
+  const handleVerifyWithBiometrics = async () => {
+    setPinError(null);
+    const res = await authenticateWithBiometrics();
+    if (res.success) {
+      if (pinModalMode === 'verify-disable') {
+        onUpdateSettings({ appLock: false });
+        closePinModal();
+        onShowToast?.('App Lock turned off');
+      } else if (pinModalMode === 'verify-change') {
+        setPinInput('');
+        setPinError(null);
+        setPinModalMode('change-create');
+      }
+    } else if (!res.cancelled && res.error) {
+      setPinError(res.error);
+    }
   };
 
   const toggleInactivityReminder = async () => {
@@ -38,6 +234,44 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
       await notificationService.requestPermission();
     }
     onUpdateSettings({ inactivityReminder: next });
+  };
+
+  const getPinModalTitle = () => {
+    switch (pinModalMode) {
+      case 'setup-create':
+        return 'Create 4-Digit PIN';
+      case 'setup-confirm':
+        return 'Confirm 4-Digit PIN';
+      case 'verify-disable':
+        return 'Verify PIN to Turn Off';
+      case 'verify-change':
+        return 'Enter Current PIN';
+      case 'change-create':
+        return 'Enter New 4-Digit PIN';
+      case 'change-confirm':
+        return 'Confirm New 4-Digit PIN';
+      default:
+        return '';
+    }
+  };
+
+  const getPinModalSubtitle = () => {
+    switch (pinModalMode) {
+      case 'setup-create':
+        return 'Choose a 4-digit PIN to protect Busy Bees Expense Tracker.';
+      case 'setup-confirm':
+        return 'Re-enter the same 4-digit PIN to confirm.';
+      case 'verify-disable':
+        return 'Enter your current 4-digit PIN to disable App Lock.';
+      case 'verify-change':
+        return 'Verify your existing 4-digit PIN before setting a new one.';
+      case 'change-create':
+        return 'Choose your new 4-digit PIN.';
+      case 'change-confirm':
+        return 'Re-enter your new 4-digit PIN to save.';
+      default:
+        return '';
+    }
   };
 
   return (
@@ -90,34 +324,126 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
         </div>
       </div>
 
+      {/* CLOUD BACKUP & RESTORE section */}
+      {onOpenBackup && (
+        <div>
+          <h3 className="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-3">
+            Backup & Restore
+          </h3>
+
+          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200/90 dark:border-slate-700/80 overflow-hidden shadow-xs">
+            <button
+              type="button"
+              onClick={onOpenBackup}
+              className="w-full flex items-center justify-between p-4 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition text-left"
+            >
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="w-9 h-9 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0">
+                  <Cloud className="w-5 h-5" />
+                </div>
+                <div className="min-w-0">
+                  <span className="block text-[15px] text-slate-800 dark:text-slate-100 font-medium">
+                    Google Drive Backup
+                  </span>
+                  <span className="block text-xs text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                    Last backup: {formatBackupTimestamp(backupMeta.lastBackupTime)}
+                  </span>
+                </div>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-400 dark:text-slate-500 shrink-0" />
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* PRIVACY section */}
       <div>
         <h3 className="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-3">
           Privacy
         </h3>
 
-        <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200/90 dark:border-slate-700/80 p-4 shadow-xs">
-          <div className="flex items-center justify-between">
-            <span className="text-[15px] text-slate-800 dark:text-slate-100 font-medium">App lock</span>
-            <button
-              type="button"
-              onClick={toggleAppLock}
-              role="switch"
-              aria-checked={settings.appLock}
-              className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
-                settings.appLock ? 'bg-[#2357A4]' : 'bg-slate-200 dark:bg-slate-700'
-              }`}
-            >
-              <span
-                className={`pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
-                  settings.appLock ? 'translate-x-5' : 'translate-x-0'
+        <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200/90 dark:border-slate-700/80 divide-y divide-slate-100 dark:divide-slate-700/60 overflow-hidden shadow-xs">
+          <div className="p-4">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <Lock className="w-4 h-4 text-[#2357A4] dark:text-blue-400" />
+                <span className="text-[15px] text-slate-800 dark:text-slate-100 font-medium">App lock</span>
+              </div>
+              <button
+                type="button"
+                onClick={toggleAppLock}
+                role="switch"
+                aria-checked={settings.appLock}
+                className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                  settings.appLock ? 'bg-[#2357A4]' : 'bg-slate-200 dark:bg-slate-700'
                 }`}
-              />
-            </button>
+              >
+                <span
+                  className={`pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                    settings.appLock ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
+            <p className="text-xs text-slate-400 dark:text-slate-400 mt-2.5 leading-relaxed">
+              Protect Busy Bees Expense Tracker with your own 4-digit PIN and device biometrics.
+            </p>
           </div>
-          <p className="text-xs text-slate-400 dark:text-slate-400 mt-3 leading-relaxed">
-            Use your passcode or biometrics to open Busy Bees Expense Tracker.
-          </p>
+
+          {settings.appLock && (
+            <>
+              {/* Biometric Unlock Toggle */}
+              <div className="p-4 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <Fingerprint className="w-4 h-4 text-[#2357A4] dark:text-blue-400 shrink-0" />
+                    <span className="text-[14px] text-slate-800 dark:text-slate-100 font-medium">
+                      Unlock with Biometrics
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 dark:text-slate-400 mt-1">
+                    {biometricSupported
+                      ? 'Use fingerprint or face recognition to unlock'
+                      : biometricStatus === 'NONE_ENROLLED'
+                      ? 'No fingerprint/face enrolled on this device yet'
+                      : 'Use device fingerprint or face unlock when available'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={toggleBiometricUnlock}
+                  role="switch"
+                  aria-checked={settings.biometricEnabled !== false}
+                  className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                    settings.biometricEnabled !== false
+                      ? 'bg-[#2357A4]'
+                      : 'bg-slate-200 dark:bg-slate-700'
+                  }`}
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                      settings.biometricEnabled !== false ? 'translate-x-5' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              {/* Change PIN Button */}
+              <button
+                type="button"
+                onClick={handleStartChangePin}
+                className="w-full flex items-center justify-between p-4 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition text-left"
+              >
+                <div className="flex items-center gap-2.5">
+                  <KeyRound className="w-4 h-4 text-[#2357A4] dark:text-blue-400" />
+                  <span className="text-[14px] text-slate-800 dark:text-slate-100 font-medium">
+                    Change 4-Digit PIN
+                  </span>
+                </div>
+                <ChevronRight className="w-4 h-4 text-slate-400 dark:text-slate-500" />
+              </button>
+            </>
+          )}
         </div>
       </div>
 
@@ -158,6 +484,102 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
       <div className="pt-2 text-center">
         <p className="text-xs text-slate-400 dark:text-slate-500">Your preferences are saved automatically.</p>
       </div>
+
+      {/* PIN Setup / Change / Verify Modal */}
+      {pinModalMode && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/75 backdrop-blur-xs">
+          <div className="w-full max-w-xs bg-white dark:bg-slate-800 rounded-3xl p-6 shadow-2xl text-center border border-slate-100 dark:border-slate-700 animate-in fade-in zoom-in-95">
+            <div className="w-12 h-12 rounded-full bg-blue-50 dark:bg-blue-950/60 text-[#2357A4] dark:text-blue-400 flex items-center justify-center mx-auto mb-3">
+              <Lock className="w-6 h-6 stroke-[2]" />
+            </div>
+            <h3 className="text-base font-bold text-slate-900 dark:text-slate-100">
+              {getPinModalTitle()}
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
+              {getPinModalSubtitle()}
+            </p>
+
+            {/* PIN dots */}
+            <div className="flex justify-center gap-3 my-5">
+              {[0, 1, 2, 3].map((idx) => (
+                <div
+                  key={idx}
+                  className={`w-3.5 h-3.5 rounded-full transition-all duration-200 ${
+                    pinInput.length > idx
+                      ? 'bg-[#2357A4] dark:bg-blue-400 scale-110'
+                      : pinError
+                      ? 'bg-rose-400'
+                      : 'bg-slate-200 dark:bg-slate-700'
+                  }`}
+                />
+              ))}
+            </div>
+
+            {pinError && (
+              <p className="text-xs text-rose-500 font-medium mb-3 leading-relaxed">
+                {pinError}
+              </p>
+            )}
+
+            {/* Keypad */}
+            <div className="grid grid-cols-3 gap-2.5 max-w-[220px] mx-auto">
+              {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((digit) => (
+                <button
+                  key={digit}
+                  type="button"
+                  onClick={() => handlePinDigit(digit)}
+                  className="h-11 rounded-2xl bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-900 dark:text-slate-100 font-semibold text-base active:scale-95 transition"
+                >
+                  {digit}
+                </button>
+              ))}
+
+              {(pinModalMode === 'verify-disable' || pinModalMode === 'verify-change') &&
+              biometricSupported &&
+              settings.biometricEnabled !== false ? (
+                <button
+                  type="button"
+                  onClick={handleVerifyWithBiometrics}
+                  title="Verify with Biometrics"
+                  className="h-11 rounded-2xl bg-blue-50 dark:bg-blue-950/60 hover:bg-blue-100 dark:hover:bg-blue-900/60 text-[#2357A4] dark:text-blue-400 flex items-center justify-center active:scale-95 transition"
+                >
+                  <Fingerprint className="w-5 h-5" />
+                </button>
+              ) : (
+                <div />
+              )}
+
+              <button
+                type="button"
+                onClick={() => handlePinDigit('0')}
+                className="h-11 rounded-2xl bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-900 dark:text-slate-100 font-semibold text-base active:scale-95 transition"
+              >
+                0
+              </button>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setPinInput((prev) => prev.slice(0, -1));
+                  setPinError(null);
+                }}
+                title="Backspace"
+                className="h-11 rounded-2xl bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-600 dark:text-slate-300 flex items-center justify-center active:scale-95 transition"
+              >
+                <Delete className="w-4 h-4" />
+              </button>
+            </div>
+
+            <button
+              type="button"
+              onClick={closePinModal}
+              className="mt-5 w-full py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium hover:bg-slate-50 dark:hover:bg-slate-700 transition"
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Currency Modal */}
       {currencyModalOpen && (

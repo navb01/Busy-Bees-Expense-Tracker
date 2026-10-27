@@ -1,5 +1,5 @@
 import React from 'react';
-import { X, SlidersHorizontal, Download, Info, UserRound, LogOut } from 'lucide-react';
+import { X, SlidersHorizontal, Cloud, Download, Info, UserRound, LogOut } from 'lucide-react';
 import { ScreenType } from '../types';
 
 interface DrawerProps {
@@ -61,6 +61,14 @@ export const Drawer: React.FC<DrawerProps> = ({
           >
             <SlidersHorizontal className="w-5 h-5 text-slate-600 dark:text-slate-400 stroke-[1.8]" />
             <span>Settings</span>
+          </button>
+
+          <button
+            onClick={() => handleItemClick('backup')}
+            className="w-full flex items-center gap-4 px-4 py-3.5 text-slate-800 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 rounded-xl transition font-medium text-[15px]"
+          >
+            <Cloud className="w-5 h-5 text-slate-600 dark:text-slate-400 stroke-[1.8]" />
+            <span>Backup & Restore</span>
           </button>
 
           <button

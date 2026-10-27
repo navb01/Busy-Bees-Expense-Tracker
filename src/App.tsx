@@ -13,6 +13,7 @@ import { Drawer } from './components/Drawer';
 import { DashboardScreen } from './components/screens/DashboardScreen';
 import { AddTransactionScreen } from './components/screens/AddTransactionScreen';
 import { SettingsScreen } from './components/screens/SettingsScreen';
+import { BackupRestoreScreen } from './components/screens/BackupRestoreScreen';
 import { ExportScreen } from './components/screens/ExportScreen';
 import { AboutScreen } from './components/screens/AboutScreen';
 import { ProfileScreen } from './components/screens/ProfileScreen';
@@ -21,6 +22,12 @@ import { WelcomeScreen } from './components/screens/WelcomeScreen';
 import { AppLockModal } from './components/AppLockModal';
 import { InAppNotificationBanner } from './components/InAppNotificationBanner';
 import { SplashScreen } from './components/SplashScreen';
+import {
+  findCloudBackup,
+  getAccessToken,
+  hasActiveAccessToken,
+  uploadCloudBackup,
+} from './services/googleDriveBackup';
 
 export default function App() {
   const [isLoading, setIsLoading] = useState(true);
@@ -79,6 +86,36 @@ export default function App() {
     }, 2300);
   };
 
+  // Optional auto-backup when user has an active session and frequency interval has elapsed
+  const maybeRunScheduledAutoBackup = async () => {
+    if (!hasActiveAccessToken()) return;
+    const meta = storage.getBackupMeta();
+    if (meta.frequency === 'Never' || meta.frequency === 'Only when I tap "Back up"') {
+      return;
+    }
+
+    const now = Date.now();
+    const last = meta.lastBackupTime || 0;
+    const elapsedMs = now - last;
+    const dayMs = 24 * 60 * 60 * 1000;
+
+    const isDue =
+      (meta.frequency === 'Daily' && elapsedMs >= dayMs) ||
+      (meta.frequency === 'Weekly' && elapsedMs >= 7 * dayMs) ||
+      (meta.frequency === 'Monthly' && elapsedMs >= 30 * dayMs);
+
+    if (!isDue) return;
+
+    try {
+      const token = await getAccessToken(false);
+      const existing = await findCloudBackup(token);
+      const snapshot = storage.getFullBackupSnapshot();
+      await uploadCloudBackup(token, snapshot, existing?.id);
+    } catch {
+      // silent background check
+    }
+  };
+
   // Initialize and check 24h inactivity reminder
   useEffect(() => {
     const splashTimer = setTimeout(() => {
@@ -90,7 +127,7 @@ export default function App() {
 
     const loadedSettings = storage.getSettings();
     setSettings(loadedSettings);
-    if (loadedSettings.appLock) {
+    if (loadedSettings.appLock && loadedSettings.customPinSet && loadedSettings.pinCode) {
       setIsLocked(true);
     }
 
@@ -253,6 +290,8 @@ export default function App() {
         txData.type === 'income' ? 'Income saved successfully' : 'Expense saved successfully'
       );
     }
+
+    void maybeRunScheduledAutoBackup();
   };
 
   const handleEditTransaction = (tx: Transaction) => {
@@ -280,6 +319,18 @@ export default function App() {
     storage.setOnboarded(true);
     setProfile(newProfile);
     setIsOnboarded(true);
+  };
+
+  const handleCloudRestored = (restored: {
+    transactions: Transaction[];
+    profile: UserProfile;
+    settings: AppSettings;
+  }) => {
+    setTransactions(restored.transactions);
+    setProfile(restored.profile);
+    setSettings(restored.settings);
+    setIsOnboarded(true);
+    triggerSaveToast('Restored from Google Drive');
   };
 
   const executeNativeExit = () => {
@@ -332,6 +383,7 @@ export default function App() {
           <WelcomeScreen
             initialProfile={profile}
             onComplete={handleCompleteWelcome}
+            onRestoredFromCloud={handleCloudRestored}
           />
         ) : (
           <>
@@ -388,6 +440,18 @@ export default function App() {
                 <SettingsScreen
                   settings={settings}
                   onUpdateSettings={handleUpdateSettings}
+                  onOpenBackup={() => handleNavigate('backup')}
+                  onShowToast={triggerSaveToast}
+                />
+              )}
+
+              {currentScreen === 'backup' && (
+                <BackupRestoreScreen
+                  transactions={transactions}
+                  profile={profile}
+                  settings={settings}
+                  onRestored={handleCloudRestored}
+                  onShowToast={triggerSaveToast}
                 />
               )}
 
@@ -509,11 +573,12 @@ export default function App() {
           </div>
         )}
 
-        {/* App Lock PIN Modal */}
+        {/* App Lock PIN & Biometric Modal */}
         <AppLockModal
           isLocked={isLocked}
           onUnlock={() => setIsLocked(false)}
           correctPin={settings.pinCode}
+          biometricEnabled={settings.biometricEnabled !== false}
         />
       </div>
     </div>
