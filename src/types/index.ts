@@ -40,6 +40,18 @@ export interface AppSettings {
   inactivityReminder: boolean;
   lastActiveTimestamp: number;
   notificationsEnabled: boolean;
+  smsAutoDetectEnabled?: boolean;
+}
+
+/**
+ * Strictly privacy-first representation of a transaction detected from SMS.
+ * Contains ONLY Debit/Credit status (type) and numeric amount — zero bank info or raw text.
+ */
+export interface DetectedSmsTransaction {
+  id: string;
+  type: TransactionType;
+  amount: number;
+  detectedAt: number;
 }
 
 export type BackupFrequency = 'Never' | 'Only when I tap "Back up"' | 'Daily' | 'Weekly' | 'Monthly';

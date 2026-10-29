@@ -14,6 +14,11 @@ interface AddTransactionScreenProps {
   type: TransactionType;
   transactions: Transaction[];
   editingTransaction?: Transaction | null;
+  prefillDraft?: {
+    type: TransactionType;
+    amount: number;
+    category: string;
+  } | null;
   settings: AppSettings;
   onSave: (tx: {
     type: TransactionType;
@@ -29,6 +34,7 @@ export const AddTransactionScreen: React.FC<AddTransactionScreenProps> = ({
   type,
   transactions,
   editingTransaction,
+  prefillDraft,
   settings,
   onSave,
 }) => {
@@ -38,10 +44,14 @@ export const AddTransactionScreen: React.FC<AddTransactionScreenProps> = ({
 
   const defaultAmount = editingTransaction
     ? editingTransaction.amount.toFixed(2)
+    : prefillDraft && prefillDraft.amount > 0
+    ? prefillDraft.amount.toFixed(2)
     : '';
 
   const defaultCategory = editingTransaction
     ? editingTransaction.category
+    : prefillDraft && prefillDraft.category
+    ? prefillDraft.category
     : type === 'income'
     ? 'Salary'
     : 'Food & groceries';
@@ -50,7 +60,7 @@ export const AddTransactionScreen: React.FC<AddTransactionScreenProps> = ({
   const defaultNote = editingTransaction ? editingTransaction.note : '';
 
   const [rawAmount, setRawAmount] = useState<string>(defaultAmount);
-  const [isEditingAmount, setIsEditingAmount] = useState(!editingTransaction);
+  const [isEditingAmount, setIsEditingAmount] = useState(!editingTransaction && !prefillDraft);
   const [category, setCategory] = useState<string>(defaultCategory);
   const [date, setDate] = useState<string>(defaultDate);
   const [note, setNote] = useState<string>(defaultNote);

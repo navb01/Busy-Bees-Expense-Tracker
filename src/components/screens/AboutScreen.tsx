@@ -187,53 +187,65 @@ export const AboutScreen: React.FC = () => {
               </div>
 
               <div>
-                <h4 className="font-bold text-slate-800 dark:text-slate-100 text-[13px] mb-1">3. Non-Collection of Financial Credentials & Banking APIs</h4>
+                <h4 className="font-bold text-slate-800 dark:text-slate-100 text-[13px] mb-1">3. Non-Collection of Financial Credentials &amp; Banking APIs</h4>
                 <p>
-                  Busy Bees Expense Tracker does not request, store, or process payment cards, banking account credentials, routing numbers, Plaid/Yodlee credentials, or authentication tokens. All figures are entered manually by the user.
+                  Busy Bees Expense Tracker does not request, store, or process payment cards, banking account credentials, routing numbers, Plaid/Yodlee credentials, or authentication tokens. All figures are entered manually by the user or confirmed by the user from local on-device transaction detection prompts.
                 </p>
               </div>
 
               <div>
-                <h4 className="font-bold text-slate-800 dark:text-slate-100 text-[13px] mb-1">4. Device Permissions & Push Notification Handling</h4>
+                <h4 className="font-bold text-slate-800 dark:text-slate-100 text-[13px] mb-1">4. Smart SMS &amp; Notification Transaction Detection Disclaimer</h4>
                 <p>
-                  <strong>Notifications:</strong> When you authorize notifications, the permission is utilized solely to schedule local inactivity reminders (such as the 24-hour inactivity check) generated directly by the device. No push subscription credentials, hardware tokens, or push identifiers are shared with third-party advertising or telemetric networks.
+                  When the optional <strong>Auto-Detect from SMS</strong> feature and Android Notification Access (<code>BIND_NOTIFICATION_LISTENER_SERVICE</code>) or manual SMS scanning are enabled by the user:
+                </p>
+                <ul className="list-disc pl-4 mt-1 space-y-1">
+                  <li><strong>100% On-Device Ephemeral Parsing:</strong> Incoming messaging notifications are inspected strictly in volatile memory on your device using local pattern matching to identify transaction direction keywords (such as <em>debit, credit, withdrawn, deposited, spent, received</em>) and the numeric transaction amount.</li>
+                  <li><strong>Strict Zero-Bank-Data Guarantee:</strong> The application captures <strong>only</strong> the Debit/Credit status and the numeric Amount. Bank names, account numbers, card digits, UPI IDs, reference numbers, merchant names, available account balances, OTPs, and the raw SMS text itself are <strong>strictly ignored, immediately discarded from memory, and never stored, logged, or backed up</strong>.</li>
+                  <li><strong>No External Transmission:</strong> Notification and SMS contents are never transmitted to any external server, cloud service, or third party under any circumstances.</li>
+                </ul>
+              </div>
+
+              <div>
+                <h4 className="font-bold text-slate-800 dark:text-slate-100 text-[13px] mb-1">5. Device Permissions &amp; Push Notification Handling</h4>
+                <p>
+                  <strong>Notifications:</strong> When you authorize notifications, the permission is utilized solely to schedule local inactivity reminders (such as the 24-hour inactivity check) and local prompts for detected transactions generated directly by the device. No push subscription credentials, hardware tokens, or push identifiers are shared with third-party advertising or telemetric networks.
                 </p>
               </div>
 
               <div>
-                <h4 className="font-bold text-slate-800 dark:text-slate-100 text-[13px] mb-1">5. Absence of Third-Party Advertising & Telemetry Trackers</h4>
+                <h4 className="font-bold text-slate-800 dark:text-slate-100 text-[13px] mb-1">6. Absence of Third-Party Advertising &amp; Telemetry Trackers</h4>
                 <p>
                   Busy Bees Expense Tracker does not incorporate third-party advertising SDKs, cross-site trackers, affiliate trackers, or tracking pixels (e.g., Google AdMob, Meta Pixel, or behavioral analytics beacons). We do not monetize user data in any capacity.
                 </p>
               </div>
 
               <div>
-                <h4 className="font-bold text-slate-800 dark:text-slate-100 text-[13px] mb-1">6. User Rights, Data Portability & Complete Erasure (GDPR & CCPA)</h4>
+                <h4 className="font-bold text-slate-800 dark:text-slate-100 text-[13px] mb-1">7. User Rights, Data Portability &amp; Complete Erasure (GDPR &amp; CCPA)</h4>
                 <p>
                   In accordance with the General Data Protection Regulation (GDPR Articles 15–20) and the California Consumer Privacy Act (CCPA):
                 </p>
                 <ul className="list-disc pl-4 mt-1 space-y-1">
-                  <li><strong>Right to Access & Portability:</strong> Users retain full ownership of their financial records and can generate complete CSV and PDF exports at any time without fees or artificial restrictions.</li>
+                  <li><strong>Right to Access &amp; Portability:</strong> Users retain full ownership of their financial records and can generate complete CSV and PDF exports at any time without fees or artificial restrictions.</li>
                   <li><strong>Right to Erasure (Forget Me):</strong> Users can purge individual records or purge the entire local storage through their device settings. Because data resides solely on the client hardware, erasure is instantaneous, complete, and irreversible.</li>
                 </ul>
               </div>
 
               <div>
-                <h4 className="font-bold text-slate-800 dark:text-slate-100 text-[13px] mb-1">7. Data Security and Passcode Protection</h4>
+                <h4 className="font-bold text-slate-800 dark:text-slate-100 text-[13px] mb-1">8. Data Security and Passcode Protection</h4>
                 <p>
                   Users may activate the built-in <strong>App Lock</strong> feature to protect their view from unauthorized access on shared devices. Operating system sandboxing isolates application local storage from unauthorized external origins.
                 </p>
               </div>
 
               <div>
-                <h4 className="font-bold text-slate-800 dark:text-slate-100 text-[13px] mb-1">8. Children's Privacy (COPPA)</h4>
+                <h4 className="font-bold text-slate-800 dark:text-slate-100 text-[13px] mb-1">9. Children's Privacy (COPPA)</h4>
                 <p>
                   The application is a general-purpose utility and does not knowingly solicit or collect information from children under the age of 13.
                 </p>
               </div>
 
               <div>
-                <h4 className="font-bold text-slate-800 dark:text-slate-100 text-[13px] mb-1">9. Policy Revisions & Legal Inquiries</h4>
+                <h4 className="font-bold text-slate-800 dark:text-slate-100 text-[13px] mb-1">10. Policy Revisions &amp; Legal Inquiries</h4>
                 <p>
                   Any updates to this policy will be documented with updated version tags. For inquiries regarding this Privacy Policy or data governance, contact the designated maintainer at <strong>support@busybeesapp.dev</strong>.
                 </p>

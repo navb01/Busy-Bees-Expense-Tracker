@@ -1,6 +1,15 @@
 package com.busybees.expensetracker;
 
+import android.content.BroadcastReceiver;
+import android.content.ComponentName;
+import android.content.Context;
+import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.SharedPreferences;
+import android.os.Build;
 import android.os.Bundle;
+import android.provider.Settings;
+import android.text.TextUtils;
 import android.view.View;
 import android.view.Window;
 import android.webkit.JavascriptInterface;
@@ -12,9 +21,35 @@ import androidx.core.content.ContextCompat;
 import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import com.getcapacitor.BridgeActivity;
+import java.util.Locale;
 import java.util.concurrent.Executor;
 
 public class MainActivity extends BridgeActivity {
+
+    private final BroadcastReceiver smsDetectedReceiver = new BroadcastReceiver() {
+        @Override
+        public void onReceive(Context context, Intent intent) {
+            if (intent == null || bridge == null || bridge.getWebView() == null) return;
+            String id = intent.getStringExtra("id");
+            String type = intent.getStringExtra("type");
+            double amount = intent.getDoubleExtra("amount", 0.0);
+            long detectedAt = intent.getLongExtra("detectedAt", System.currentTimeMillis());
+            if (type == null || amount <= 0) return;
+
+            String safeId = id == null ? "" : id.replace("'", "");
+            String safeType = "income".equals(type) ? "income" : "expense";
+            String js = String.format(
+                Locale.US,
+                "window.dispatchEvent(new CustomEvent('bb-sms-detected', { detail: { id: '%s', type: '%s', amount: %.2f, detectedAt: %d } }));",
+                safeId,
+                safeType,
+                amount,
+                detectedAt
+            );
+            bridge.getWebView().evaluateJavascript(js, null);
+        }
+    };
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -57,6 +92,48 @@ public class MainActivity extends BridgeActivity {
                 public void authenticateBiometric() {
                     runOnUiThread(() -> launchBiometricPrompt());
                 }
+
+                @JavascriptInterface
+                public boolean isSmsNotificationAccessGranted() {
+                    return isNotificationListenerEnabled();
+                }
+
+                @JavascriptInterface
+                public void openSmsNotificationAccessSettings() {
+                    runOnUiThread(() -> {
+                        try {
+                            Intent intent = new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS);
+                            startActivity(intent);
+                        } catch (Exception ignored) {
+                        }
+                    });
+                }
+
+                @JavascriptInterface
+                public String consumePendingSmsTransactions() {
+                    SharedPreferences prefs = getSharedPreferences(
+                        SmsNotificationListenerService.PREFS_NAME,
+                        Context.MODE_PRIVATE
+                    );
+                    String pending = prefs.getString(
+                        SmsNotificationListenerService.KEY_PENDING_QUEUE,
+                        "[]"
+                    );
+                    prefs.edit().putString(SmsNotificationListenerService.KEY_PENDING_QUEUE, "[]").apply();
+                    return pending != null ? pending : "[]";
+                }
+
+                @JavascriptInterface
+                public void setSmsAutoDetectEnabled(boolean enabled) {
+                    SharedPreferences prefs = getSharedPreferences(
+                        SmsNotificationListenerService.PREFS_NAME,
+                        Context.MODE_PRIVATE
+                    );
+                    prefs.edit().putBoolean(
+                        SmsNotificationListenerService.KEY_AUTO_DETECT_ENABLED,
+                        enabled
+                    ).apply();
+                }
             }, "BusyBeesNative");
         }
 
@@ -72,6 +149,44 @@ public class MainActivity extends BridgeActivity {
                 }
             }
         });
+    }
+
+    @Override
+    public void onStart() {
+        super.onStart();
+        IntentFilter filter = new IntentFilter(SmsNotificationListenerService.ACTION_SMS_DETECTED);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(smsDetectedReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
+        } else {
+            registerReceiver(smsDetectedReceiver, filter);
+        }
+    }
+
+    @Override
+    public void onStop() {
+        try {
+            unregisterReceiver(smsDetectedReceiver);
+        } catch (Exception ignored) {
+        }
+        super.onStop();
+    }
+
+    private boolean isNotificationListenerEnabled() {
+        String pkgName = getPackageName();
+        final String flat = Settings.Secure.getString(
+            getContentResolver(),
+            "enabled_notification_listeners"
+        );
+        if (!TextUtils.isEmpty(flat)) {
+            final String[] names = flat.split(":");
+            for (String name : names) {
+                final ComponentName cn = ComponentName.unflattenFromString(name);
+                if (cn != null && TextUtils.equals(pkgName, cn.getPackageName())) {
+                    return true;
+                }
+            }
+        }
+        return false;
     }
 
     private void launchBiometricPrompt() {

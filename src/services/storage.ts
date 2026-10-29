@@ -1,4 +1,10 @@
-import { AppSettings, LocalBackupMetadata, Transaction, UserProfile } from '../types';
+import {
+  AppSettings,
+  DetectedSmsTransaction,
+  LocalBackupMetadata,
+  Transaction,
+  UserProfile,
+} from '../types';
 
 const STORAGE_KEYS = {
   VERSION: 'bb_storage_version',
@@ -10,9 +16,10 @@ const STORAGE_KEYS = {
   INSTALLED_AT: 'bb_installed_at_v1',
   ONBOARDED: 'bb_onboarded_v1',
   BACKUP_META: 'bb_gdrive_backup_meta_v1',
+  PENDING_SMS_QUEUE: 'bb_pending_sms_queue_v1',
 };
 
-const CURRENT_STORAGE_VERSION = 4;
+const CURRENT_STORAGE_VERSION = 5;
 
 export const DEFAULT_PROFILE: UserProfile = {
   name: '',
@@ -32,6 +39,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   inactivityReminder: true,
   lastActiveTimestamp: Date.now(),
   notificationsEnabled: false,
+  smsAutoDetectEnabled: true,
 };
 
 export const DEFAULT_BACKUP_META: LocalBackupMetadata = {
@@ -70,6 +78,9 @@ class StorageService {
         localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify([]));
         localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify(DEFAULT_PROFILE));
         localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(DEFAULT_SETTINGS));
+        localStorage.setItem(STORAGE_KEYS.BACKUP_META, JSON.stringify(DEFAULT_BACKUP_META));
+        localStorage.setItem(STORAGE_KEYS.PENDING_SMS_QUEUE, JSON.stringify([]));
+        localStorage.removeItem(STORAGE_KEYS.LAST_NOTIFIED);
         localStorage.setItem(STORAGE_KEYS.LAST_ACTIVE, String(Date.now()));
         localStorage.setItem(STORAGE_KEYS.INSTALLED_AT, getTodayISO());
         localStorage.setItem(STORAGE_KEYS.ONBOARDED, 'false');
@@ -375,7 +386,96 @@ class StorageService {
       hoursInactive: hours,
     };
   }
+
+  /**
+   * Returns queued SMS-detected transactions.
+   * Strictly stores only { id, type, amount, detectedAt } — zero bank info or raw SMS text.
+   */
+  getPendingSmsTransactions(): DetectedSmsTransaction[] {
+    this.init();
+    try {
+      const raw = localStorage.getItem(STORAGE_KEYS.PENDING_SMS_QUEUE);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .filter(
+          (item) =>
+            item &&
+            (item.type === 'income' || item.type === 'expense') &&
+            typeof item.amount === 'number' &&
+            item.amount > 0
+        )
+        .map((item) => ({
+          id: String(item.id || 'sms_' + Date.now()),
+          type: item.type,
+          amount: Number(item.amount),
+          detectedAt: Number(item.detectedAt || Date.now()),
+        }));
+    } catch {
+      return [];
+    }
+  }
+
+  savePendingSmsTransactions(queue: DetectedSmsTransaction[]): void {
+    try {
+      // Strictly strip any fields other than id, type, amount, detectedAt
+      const sanitized: DetectedSmsTransaction[] = queue.map((item) => ({
+        id: item.id,
+        type: item.type,
+        amount: item.amount,
+        detectedAt: item.detectedAt,
+      }));
+      localStorage.setItem(STORAGE_KEYS.PENDING_SMS_QUEUE, JSON.stringify(sanitized));
+    } catch {
+      // ignore
+    }
+  }
+
+  enqueueDetectedSmsTransaction(item: {
+    id?: string;
+    type: 'income' | 'expense';
+    amount: number;
+    detectedAt?: number;
+  }): DetectedSmsTransaction[] {
+    const queue = this.getPendingSmsTransactions();
+    const detectedAt = item.detectedAt || Date.now();
+    const id =
+      item.id ||
+      `sms_${detectedAt}_${Math.random().toString(36).substring(2, 7)}`;
+
+    // Avoid duplicate entry if same id or identical type + amount within 10 seconds
+    const isDuplicate = queue.some(
+      (q) =>
+        q.id === id ||
+        (q.type === item.type &&
+          Math.abs(q.amount - item.amount) < 0.001 &&
+          Math.abs(q.detectedAt - detectedAt) < 10000)
+    );
+
+    if (isDuplicate) return queue;
+
+    const nextQueue: DetectedSmsTransaction[] = [
+      ...queue,
+      {
+        id,
+        type: item.type,
+        amount: item.amount,
+        detectedAt,
+      },
+    ];
+    this.savePendingSmsTransactions(nextQueue);
+    return nextQueue;
+  }
+
+  removePendingSmsTransaction(id: string): DetectedSmsTransaction[] {
+    const queue = this.getPendingSmsTransactions();
+    const nextQueue = queue.filter((q) => q.id !== id);
+    this.savePendingSmsTransactions(nextQueue);
+    return nextQueue;
+  }
 }
 
 export const storage = new StorageService();
+
 

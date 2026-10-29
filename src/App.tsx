@@ -5,7 +5,14 @@
 
 import React, { useEffect, useRef, useState } from 'react';
 import { LogOut, AlertTriangle, CheckCircle2 } from 'lucide-react';
-import { AppSettings, ScreenType, Transaction, TransactionType, UserProfile } from './types';
+import {
+  AppSettings,
+  DetectedSmsTransaction,
+  ScreenType,
+  Transaction,
+  TransactionType,
+  UserProfile,
+} from './types';
 import { storage } from './services/storage';
 import { notificationService } from './services/notifications';
 import { Header } from './components/Header';
@@ -21,6 +28,7 @@ import { ExitScreen } from './components/screens/ExitScreen';
 import { WelcomeScreen } from './components/screens/WelcomeScreen';
 import { AppLockModal } from './components/AppLockModal';
 import { InAppNotificationBanner } from './components/InAppNotificationBanner';
+import { SmsDetectionPopup } from './components/SmsDetectionPopup';
 import { SplashScreen } from './components/SplashScreen';
 import {
   findCloudBackup,
@@ -28,6 +36,11 @@ import {
   hasActiveAccessToken,
   uploadCloudBackup,
 } from './services/googleDriveBackup';
+import {
+  consumeNativePendingSmsTransactions,
+  consumeUrlSmsTrigger,
+  syncNativeSmsAutoDetectEnabled,
+} from './services/smsTransactionParser';
 
 export default function App() {
   const [isLoading, setIsLoading] = useState(true);
@@ -38,6 +51,14 @@ export default function App() {
   const [profile, setProfile] = useState<UserProfile>(() => storage.getProfile());
   const [settings, setSettings] = useState<AppSettings>(() => storage.getSettings());
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
+  const [smsPrefillDraft, setSmsPrefillDraft] = useState<{
+    type: TransactionType;
+    amount: number;
+    category: string;
+  } | null>(null);
+  const [smsQueue, setSmsQueue] = useState<DetectedSmsTransaction[]>(() =>
+    storage.getPendingSmsTransactions()
+  );
   const [isLocked, setIsLocked] = useState(false);
 
   // Unified Exit Confirmation Pop-up (#21)
@@ -127,6 +148,7 @@ export default function App() {
 
     const loadedSettings = storage.getSettings();
     setSettings(loadedSettings);
+    syncNativeSmsAutoDetectEnabled(loadedSettings.smsAutoDetectEnabled !== false);
     if (loadedSettings.appLock && loadedSettings.customPinSet && loadedSettings.pinCode) {
       setIsLocked(true);
     }
@@ -135,15 +157,64 @@ export default function App() {
     setProfile(loadedProfile);
     setIsOnboarded(storage.isOnboarded());
 
+    // Drain any SMS transactions detected by Android NotificationListenerService or iOS URL trigger
+    const syncDetectedSms = () => {
+      const currentSettings = storage.getSettings();
+      if (currentSettings.smsAutoDetectEnabled === false) return;
+
+      const nativeDetected = consumeNativePendingSmsTransactions();
+      for (const item of nativeDetected) {
+        storage.enqueueDetectedSmsTransaction(item);
+      }
+
+      const urlTriggered = consumeUrlSmsTrigger();
+      if (urlTriggered) {
+        storage.enqueueDetectedSmsTransaction(urlTriggered);
+      }
+
+      setSmsQueue(storage.getPendingSmsTransactions());
+    };
+
+    syncDetectedSms();
+
+    const handleLiveNativeSmsEvent = (evt: Event) => {
+      const customEvt = evt as CustomEvent<{
+        id?: string;
+        type?: TransactionType;
+        amount?: number;
+        detectedAt?: number;
+      }>;
+      const detail = customEvt.detail;
+      if (
+        detail &&
+        (detail.type === 'income' || detail.type === 'expense') &&
+        typeof detail.amount === 'number' &&
+        detail.amount > 0
+      ) {
+        const updatedQueue = storage.enqueueDetectedSmsTransaction({
+          id: detail.id,
+          type: detail.type,
+          amount: detail.amount,
+          detectedAt: detail.detectedAt,
+        });
+        setSmsQueue(updatedQueue);
+      } else {
+        syncDetectedSms();
+      }
+    };
+
     notificationService.checkAndTrigger24hReminder();
     storage.recordActivity();
 
     const handleFocus = () => {
       notificationService.checkAndTrigger24hReminder();
       storage.recordActivity();
+      syncDetectedSms();
     };
 
     window.addEventListener('focus', handleFocus);
+    document.addEventListener('visibilitychange', handleFocus);
+    window.addEventListener('bb-sms-detected', handleLiveNativeSmsEvent);
     const interval = setInterval(() => {
       notificationService.checkAndTrigger24hReminder();
     }, 60 * 60 * 1000);
@@ -151,6 +222,8 @@ export default function App() {
     return () => {
       clearTimeout(splashTimer);
       window.removeEventListener('focus', handleFocus);
+      document.removeEventListener('visibilitychange', handleFocus);
+      window.removeEventListener('bb-sms-detected', handleLiveNativeSmsEvent);
       clearInterval(interval);
     };
   }, []);
@@ -241,6 +314,7 @@ export default function App() {
     if (screen !== 'edit-transaction') {
       setEditingTransaction(null);
     }
+    setSmsPrefillDraft(null);
     setCurrentScreen(screen);
     storage.recordActivity();
   };
@@ -253,12 +327,14 @@ export default function App() {
     }
     setCurrentScreen('dashboard');
     setEditingTransaction(null);
+    setSmsPrefillDraft(null);
     storage.recordActivity();
   };
 
   const handleConfirmDiscardTransaction = () => {
     setUnsavedWarningOpen(false);
     setEditingTransaction(null);
+    setSmsPrefillDraft(null);
     setCurrentScreen('dashboard');
     storage.recordActivity();
   };
@@ -278,6 +354,7 @@ export default function App() {
     }
     setTransactions(storage.getTransactions());
     setEditingTransaction(null);
+    setSmsPrefillDraft(null);
     setCurrentScreen('dashboard');
 
     // Trigger small fading bottom message (#22)
@@ -294,7 +371,55 @@ export default function App() {
     void maybeRunScheduledAutoBackup();
   };
 
+  const handleSaveSmsAsIs = (
+    itemId: string,
+    txData: {
+      type: TransactionType;
+      amount: number;
+      category: string;
+      date: string;
+      note: string;
+    }
+  ) => {
+    storage.addTransaction(txData);
+    setTransactions(storage.getTransactions());
+    const remaining = storage.removePendingSmsTransaction(itemId);
+    setSmsQueue(remaining);
+
+    triggerSaveToast(
+      txData.type === 'income' ? 'Income saved successfully' : 'Expense saved successfully'
+    );
+
+    void maybeRunScheduledAutoBackup();
+  };
+
+  const handleEditSmsDetected = (
+    itemId: string,
+    draft: {
+      type: TransactionType;
+      amount: number;
+      category: string;
+    }
+  ) => {
+    const remaining = storage.removePendingSmsTransaction(itemId);
+    setSmsQueue(remaining);
+    setEditingTransaction(null);
+    setSmsPrefillDraft(draft);
+    setCurrentScreen(draft.type === 'income' ? 'add-income' : 'add-expense');
+  };
+
+  const handleDismissSmsDetected = (itemId: string) => {
+    const remaining = storage.removePendingSmsTransaction(itemId);
+    setSmsQueue(remaining);
+  };
+
+  const handleSimulateOrScanSms = (detected: { type: TransactionType; amount: number }) => {
+    const updatedQueue = storage.enqueueDetectedSmsTransaction(detected);
+    setSmsQueue(updatedQueue);
+  };
+
   const handleEditTransaction = (tx: Transaction) => {
+    setSmsPrefillDraft(null);
     setEditingTransaction(tx);
     setCurrentScreen(tx.type === 'income' ? 'add-income' : 'add-expense');
   };
@@ -419,6 +544,7 @@ export default function App() {
                   type="income"
                   transactions={transactions}
                   editingTransaction={editingTransaction}
+                  prefillDraft={smsPrefillDraft?.type === 'income' ? smsPrefillDraft : null}
                   settings={settings}
                   onSave={handleSaveTransaction}
                   onCancel={handleBack}
@@ -430,6 +556,7 @@ export default function App() {
                   type="expense"
                   transactions={transactions}
                   editingTransaction={editingTransaction}
+                  prefillDraft={smsPrefillDraft?.type === 'expense' ? smsPrefillDraft : null}
                   settings={settings}
                   onSave={handleSaveTransaction}
                   onCancel={handleBack}
@@ -442,6 +569,7 @@ export default function App() {
                   onUpdateSettings={handleUpdateSettings}
                   onOpenBackup={() => handleNavigate('backup')}
                   onShowToast={triggerSaveToast}
+                  onSimulateOrScanSms={handleSimulateOrScanSms}
                 />
               )}
 
@@ -572,6 +700,22 @@ export default function App() {
             </div>
           </div>
         )}
+
+        {/* Truecaller-Style SMS Detected Transaction Popup */}
+        {!isLoading &&
+          isOnboarded &&
+          !isLocked &&
+          settings.smsAutoDetectEnabled !== false &&
+          smsQueue.length > 0 && (
+            <SmsDetectionPopup
+              queue={smsQueue}
+              transactions={transactions}
+              settings={settings}
+              onSaveAsIs={handleSaveSmsAsIs}
+              onEditItem={handleEditSmsDetected}
+              onDismissItem={handleDismissSmsDetected}
+            />
+          )}
 
         {/* App Lock PIN & Biometric Modal */}
         <AppLockModal

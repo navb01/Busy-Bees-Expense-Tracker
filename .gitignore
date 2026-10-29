@@ -8,4 +8,10 @@ coverage/
 !.env.example
 **/google-services.json
 android/app/src/main/assets/public/
+android/.gradle/
+android/build/
+android/app/build/
+public/assets/aistudio/*
+!public/assets/aistudio/BB_logo_512x512_a9c1fff0.png
+
 
