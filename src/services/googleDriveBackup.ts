@@ -1,4 +1,4 @@
-import { initializeApp, getApps, getApp } from 'firebase/app';
+import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
 import {
   getAuth,
   GoogleAuthProvider,
@@ -6,12 +6,39 @@ import {
   signOut as firebaseSignOut,
   onAuthStateChanged,
   User,
+  Auth,
 } from 'firebase/auth';
-import firebaseConfig from '../../firebase-applet-config.json';
+import rawFirebaseConfig from '../../firebase-applet-config.json';
 import { AppBackupSnapshot, storage } from './storage';
 
-const app = getApps().length ? getApp() : initializeApp(firebaseConfig);
-export const auth = getAuth(app);
+const resolvedFirebaseConfig = {
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || rawFirebaseConfig.projectId || '',
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || rawFirebaseConfig.appId || '',
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || rawFirebaseConfig.apiKey || '',
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || rawFirebaseConfig.authDomain || '',
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || rawFirebaseConfig.storageBucket || '',
+  messagingSenderId:
+    import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || rawFirebaseConfig.messagingSenderId || '',
+  measurementId: rawFirebaseConfig.measurementId || '',
+};
+
+let firebaseAppInstance: FirebaseApp | null = null;
+let firebaseAuthInstance: Auth | null = null;
+
+function getFirebaseAuth(): Auth | null {
+  if (firebaseAuthInstance) return firebaseAuthInstance;
+  if (!resolvedFirebaseConfig.apiKey) {
+    return null;
+  }
+  try {
+    firebaseAppInstance = getApps().length ? getApp() : initializeApp(resolvedFirebaseConfig);
+    firebaseAuthInstance = getAuth(firebaseAppInstance);
+    return firebaseAuthInstance;
+  } catch (err) {
+    console.warn('Firebase Auth initialization skipped:', err);
+    return null;
+  }
+}
 
 export const BACKUP_FILE_NAME = 'busy_bees_expense_tracker_backup.json';
 
@@ -48,6 +75,12 @@ export async function connectGoogleAccount(selectAccount = false): Promise<{
   user: User;
   accessToken: string;
 }> {
+  const auth = getFirebaseAuth();
+  if (!auth) {
+    throw new Error(
+      'Google Drive backup requires VITE_FIREBASE_API_KEY to be set in your .env.local file.'
+    );
+  }
   const provider = createGoogleProvider(selectAccount);
   const result = await signInWithPopup(auth, provider);
   const credential = GoogleAuthProvider.credentialFromResult(result);
@@ -77,11 +110,19 @@ export async function getAccessToken(selectAccount = false): Promise<string> {
 
 export async function disconnectGoogleAccount(): Promise<void> {
   invalidateAccessToken();
-  await firebaseSignOut(auth);
+  const auth = getFirebaseAuth();
+  if (auth) {
+    await firebaseSignOut(auth);
+  }
   storage.saveBackupMeta({ googleEmail: '' });
 }
 
 export function subscribeAuthUser(callback: (user: User | null) => void): () => void {
+  const auth = getFirebaseAuth();
+  if (!auth) {
+    callback(null);
+    return () => {};
+  }
   return onAuthStateChanged(auth, (user) => {
     if (!user) {
       invalidateAccessToken();
@@ -235,7 +276,7 @@ export async function uploadCloudBackup(
     lastBackupTime: new Date(modifiedTime).getTime(),
     lastBackupSize: sizeBytes,
     lastBackupTxCount: snapshot.transactions.length,
-    googleEmail: auth.currentUser?.email || storage.getBackupMeta().googleEmail,
+    googleEmail: getFirebaseAuth()?.currentUser?.email || storage.getBackupMeta().googleEmail,
   });
 
   return {

@@ -6,3 +6,6 @@ coverage/
 *.log
 .env*
 !.env.example
+**/google-services.json
+android/app/src/main/assets/public/
+
