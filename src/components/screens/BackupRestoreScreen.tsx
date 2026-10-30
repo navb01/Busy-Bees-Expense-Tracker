@@ -33,6 +33,8 @@ import {
   formatBytes,
   getAccessToken,
   hasActiveAccessToken,
+  isNativeDriveBridgeAvailable,
+  pickAndDownloadNativeBackup,
   subscribeAuthUser,
   uploadCloudBackup,
 } from '../../services/googleDriveBackup';
@@ -270,6 +272,14 @@ export const BackupRestoreScreen: React.FC<BackupRestoreScreenProps> = ({
       }
 
       if (!found) {
+        if (isNativeDriveBridgeAvailable()) {
+          setBusyAction('Select your backup file from Google Drive...');
+          const picked = await pickAndDownloadNativeBackup();
+          setCloudBackup(picked.fileInfo);
+          setPendingRestoreSnapshot({ fileInfo: picked.fileInfo, snapshot: picked.snapshot });
+          setConfirmRestoreModalOpen(true);
+          return;
+        }
         setStatusBanner({
           type: 'error',
           message: 'No backup file was found on Google Drive for this Google account.',

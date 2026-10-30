@@ -19,7 +19,7 @@ const STORAGE_KEYS = {
   PENDING_SMS_QUEUE: 'bb_pending_sms_queue_v1',
 };
 
-const CURRENT_STORAGE_VERSION = 5;
+const CURRENT_STORAGE_VERSION = 6;
 
 export const DEFAULT_PROFILE: UserProfile = {
   name: '',
@@ -31,7 +31,7 @@ export const DEFAULT_PROFILE: UserProfile = {
 export const DEFAULT_SETTINGS: AppSettings = {
   currency: 'INR',
   weekStartsOn: 'Monday',
-  appearance: 'Light',
+  appearance: 'Dark',
   appLock: false,
   pinCode: '',
   customPinSet: false,
@@ -72,7 +72,7 @@ class StorageService {
     if (this.initialized) return;
     try {
       const storedVersion = localStorage.getItem(STORAGE_KEYS.VERSION);
-      if (!storedVersion || Number(storedVersion) < CURRENT_STORAGE_VERSION) {
+      if (!storedVersion || Number(storedVersion) < 5) {
         // Initialize / reset to a clean, empty state with zero dummy or test values
         localStorage.setItem(STORAGE_KEYS.VERSION, String(CURRENT_STORAGE_VERSION));
         localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify([]));
@@ -84,6 +84,19 @@ class StorageService {
         localStorage.setItem(STORAGE_KEYS.LAST_ACTIVE, String(Date.now()));
         localStorage.setItem(STORAGE_KEYS.INSTALLED_AT, getTodayISO());
         localStorage.setItem(STORAGE_KEYS.ONBOARDED, 'false');
+      } else if (Number(storedVersion) < CURRENT_STORAGE_VERSION) {
+        // Upgrade v5 -> v6: set Dark mode as default while preserving existing user data
+        localStorage.setItem(STORAGE_KEYS.VERSION, String(CURRENT_STORAGE_VERSION));
+        try {
+          const rawSettings = localStorage.getItem(STORAGE_KEYS.SETTINGS);
+          const parsedSettings = rawSettings ? JSON.parse(rawSettings) : {};
+          localStorage.setItem(
+            STORAGE_KEYS.SETTINGS,
+            JSON.stringify({ ...DEFAULT_SETTINGS, ...parsedSettings, appearance: 'Dark' })
+          );
+        } catch {
+          localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(DEFAULT_SETTINGS));
+        }
       }
       this.initialized = true;
     } catch (e) {

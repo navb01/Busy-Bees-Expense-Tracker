@@ -13,7 +13,7 @@ import {
   TransactionType,
   UserProfile,
 } from './types';
-import { storage } from './services/storage';
+import { getTodayISO, storage } from './services/storage';
 import { notificationService } from './services/notifications';
 import { Header } from './components/Header';
 import { Drawer } from './components/Drawer';
@@ -37,6 +37,7 @@ import {
   uploadCloudBackup,
 } from './services/googleDriveBackup';
 import {
+  consumeNativeNotificationAction,
   consumeNativePendingSmsTransactions,
   consumeUrlSmsTrigger,
   syncNativeSmsAutoDetectEnabled,
@@ -131,7 +132,7 @@ export default function App() {
       const token = await getAccessToken(false);
       const existing = await findCloudBackup(token);
       const snapshot = storage.getFullBackupSnapshot();
-      await uploadCloudBackup(token, snapshot, existing?.id);
+      await uploadCloudBackup(token, snapshot, existing?.id, false);
     } catch {
       // silent background check
     }
@@ -157,7 +158,42 @@ export default function App() {
     setProfile(loadedProfile);
     setIsOnboarded(storage.isOnboarded());
 
-    // Drain any SMS transactions detected by Android NotificationListenerService or iOS URL trigger
+    const executeNotificationAction = (actionObj: {
+      action: 'save' | 'edit';
+      id: string;
+      type: TransactionType;
+      amount: number;
+    }) => {
+      const defaultCategory = actionObj.type === 'income' ? 'Salary' : 'Shopping';
+      if (actionObj.action === 'save') {
+        storage.addTransaction({
+          type: actionObj.type,
+          amount: actionObj.amount,
+          category: defaultCategory,
+          date: getTodayISO(),
+          note: '',
+        });
+        setTransactions(storage.getTransactions());
+        const remaining = storage.removePendingSmsTransaction(actionObj.id);
+        setSmsQueue(remaining);
+        triggerSaveToast(
+          actionObj.type === 'income' ? 'Income saved successfully' : 'Expense saved successfully'
+        );
+        void maybeRunScheduledAutoBackup();
+      } else if (actionObj.action === 'edit') {
+        const remaining = storage.removePendingSmsTransaction(actionObj.id);
+        setSmsQueue(remaining);
+        setEditingTransaction(null);
+        setSmsPrefillDraft({
+          type: actionObj.type,
+          amount: actionObj.amount,
+          category: defaultCategory,
+        });
+        setCurrentScreen(actionObj.type === 'income' ? 'add-income' : 'add-expense');
+      }
+    };
+
+    // Drain any SMS transactions detected by Android SMS Receiver / NotificationListenerService or iOS URL trigger
     const syncDetectedSms = () => {
       const currentSettings = storage.getSettings();
       if (currentSettings.smsAutoDetectEnabled === false) return;
@@ -173,6 +209,11 @@ export default function App() {
       }
 
       setSmsQueue(storage.getPendingSmsTransactions());
+
+      const notifAction = consumeNativeNotificationAction();
+      if (notifAction) {
+        executeNotificationAction(notifAction);
+      }
     };
 
     syncDetectedSms();
@@ -183,8 +224,14 @@ export default function App() {
         type?: TransactionType;
         amount?: number;
         detectedAt?: number;
+        dismissedId?: string;
       }>;
       const detail = customEvt.detail;
+      if (detail?.dismissedId) {
+        const remaining = storage.removePendingSmsTransaction(detail.dismissedId);
+        setSmsQueue(remaining);
+        return;
+      }
       if (
         detail &&
         (detail.type === 'income' || detail.type === 'expense') &&
@@ -203,6 +250,30 @@ export default function App() {
       }
     };
 
+    const handleLiveNotifAction = (evt: Event) => {
+      const customEvt = evt as CustomEvent<{
+        action?: 'save' | 'edit';
+        id?: string;
+        type?: TransactionType;
+        amount?: number;
+      }>;
+      const d = customEvt.detail;
+      if (
+        d &&
+        (d.action === 'save' || d.action === 'edit') &&
+        (d.type === 'income' || d.type === 'expense') &&
+        typeof d.amount === 'number' &&
+        d.amount > 0
+      ) {
+        executeNotificationAction({
+          action: d.action,
+          id: String(d.id || ''),
+          type: d.type,
+          amount: d.amount,
+        });
+      }
+    };
+
     notificationService.checkAndTrigger24hReminder();
     storage.recordActivity();
 
@@ -215,6 +286,7 @@ export default function App() {
     window.addEventListener('focus', handleFocus);
     document.addEventListener('visibilitychange', handleFocus);
     window.addEventListener('bb-sms-detected', handleLiveNativeSmsEvent);
+    window.addEventListener('bb-sms-notif-action', handleLiveNotifAction);
     const interval = setInterval(() => {
       notificationService.checkAndTrigger24hReminder();
     }, 60 * 60 * 1000);
@@ -224,6 +296,7 @@ export default function App() {
       window.removeEventListener('focus', handleFocus);
       document.removeEventListener('visibilitychange', handleFocus);
       window.removeEventListener('bb-sms-detected', handleLiveNativeSmsEvent);
+      window.removeEventListener('bb-sms-notif-action', handleLiveNotifAction);
       clearInterval(interval);
     };
   }, []);
@@ -413,11 +486,6 @@ export default function App() {
     setSmsQueue(remaining);
   };
 
-  const handleSimulateOrScanSms = (detected: { type: TransactionType; amount: number }) => {
-    const updatedQueue = storage.enqueueDetectedSmsTransaction(detected);
-    setSmsQueue(updatedQueue);
-  };
-
   const handleEditTransaction = (tx: Transaction) => {
     setSmsPrefillDraft(null);
     setEditingTransaction(tx);
@@ -569,7 +637,6 @@ export default function App() {
                   onUpdateSettings={handleUpdateSettings}
                   onOpenBackup={() => handleNavigate('backup')}
                   onShowToast={triggerSaveToast}
-                  onSimulateOrScanSms={handleSimulateOrScanSms}
                 />
               )}
 

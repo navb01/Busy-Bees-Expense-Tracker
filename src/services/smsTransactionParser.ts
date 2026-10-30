@@ -2,8 +2,15 @@ import { DetectedSmsTransaction, TransactionType } from '../types';
 
 interface NativeSmsBridge {
   isSmsNotificationAccessGranted?: () => boolean;
+  isDirectSmsPermissionGranted?: () => boolean;
+  isNotificationListenerAccessGranted?: () => boolean;
+  isOverlayBubblePermissionGranted?: () => boolean;
+  requestOverlayBubblePermission?: () => void;
+  requestSmsRuntimePermission?: () => void;
   openSmsNotificationAccessSettings?: () => void;
+  openNotificationListenerSettingsDirect?: () => void;
   consumePendingSmsTransactions?: () => string;
+  consumePendingNotificationAction?: () => string;
   setSmsAutoDetectEnabled?: (enabled: boolean) => void;
 }
 
@@ -24,7 +31,12 @@ export function parseTransactionSms(
   if (!rawSmsText || typeof rawSmsText !== 'string') return null;
 
   const trimmed = rawSmsText.trim();
-  if (trimmed.length < 6 || trimmed.length > 1000) return null;
+  if (trimmed.length < 6 || trimmed.length > 1500) return null;
+
+  // Ignore outgoing messages prefixed with "You:"
+  if (/^you\s*:/i.test(trimmed)) {
+    return null;
+  }
 
   const lower = trimmed.toLowerCase();
 
@@ -35,6 +47,9 @@ export function parseTransactionSms(
     /\bverification\s+code\b/i,
     /\bsecurity\s+code\b/i,
     /\bauth(?:entication)?\s+code\b/i,
+    /\blogin\s+code\b/i,
+    /\bsecret\s+code\b/i,
+    /\bdo\s+not\s+share\s+(?:this\s+)?(?:otp|code)\b/i,
     /\bpre[\s-]?approved\b/i,
     /\beligible\s+for\b/i,
     /\bapply\s+now\b/i,
@@ -46,6 +61,7 @@ export function parseTransactionSms(
     /\btotal\s+amount\s+due\b/i,
     /\bstatement\s+for\b/i,
     /\bmandate\s+for\b/i,
+    /\bemi\s+of\s+.*\s+is\s+due\b/i,
   ];
 
   for (const pattern of ignorePatterns) {
@@ -54,65 +70,109 @@ export function parseTransactionSms(
     }
   }
 
-  // 2. Strip balance / credit-limit clauses first so remaining balance is never mistaken for transaction amount
-  const sanitizedForAmount = trimmed
+  // 2. Strip balance clauses, UPI/IMPS reference strings, masked account numbers, and dates
+  // so reference numbers (e.g. UPI/DR/43021234/Name) or A/c numbers never confuse Credit/Debit or Amount
+  const sanitized = trimmed
     .replace(
-      /\b(?:avl\.?|avail(?:able)?|updated|clear|clr|tot(?:al)?|closing|net|eff(?:ective)?|ac(?:count)?)\s*(?:bal(?:ance)?|limit)\s*(?:is)?\s*[:=-]?\s*(?:rs\.?|inr|₹|usd|\$|eur|€|gbp|£|aed|cad|aud|jpy|¥)?\s*[\d,]+(?:\.\d{1,2})?(?:\s*(?:cr|dr)\.?)?/gi,
+      /\b(?:avl\.?|avail(?:able)?|updated|clear|clr|tot(?:al)?|closing|current|curr|net|eff(?:ective)?|ac(?:count)?|combined)\s*(?:bal(?:ance)?|limit|val(?:ue)?)\s*(?:is)?\s*[:=-]?\s*(?:rs\.?|inr|₹|usd|\$|eur|€|gbp|£|aed|cad|aud|jpy|¥)?\s*[\d,]+(?:\.\d{1,2})?(?:\s*(?:cr|dr)\.?)?/gi,
       ' '
     )
     .replace(
-      /\bbal(?:ance)?\s*[:=-]\s*(?:rs\.?|inr|₹|usd|\$|eur|€|gbp|£|aed|cad|aud|jpy|¥)?\s*[\d,]+(?:\.\d{1,2})?/gi,
+      /\b(?:bal(?:ance)?|limit)\s*(?:is)?\s*[:=-]\s*(?:rs\.?|inr|₹|usd|\$|eur|€|gbp|£|aed|cad|aud|jpy|¥)?\s*[\d,]+(?:\.\d{1,2})?(?:\s*(?:cr|dr)\.?)?/gi,
+      ' '
+    )
+    .replace(
+      /\b(?:upi|imps|neft|rtgs|mmt|ach|ecs|utr|rrn|ref(?:\.?\s*no\.?|\s*id)?)\s*[:/#-]?\s*[a-z0-9/@._-]{5,}/gi,
+      ' '
+    )
+    .replace(
+      /\b(?:a\/?c|acct|account|card)\s*(?:no\.?|number|ending(?:\s+with)?|#)?\s*[x*#.-]*\d{2,8}\b/gi,
+      ' '
+    )
+    .replace(
+      /\b\d{1,2}[-/\s](?:\d{1,2}|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*[-/\s]\d{2,4}\b/gi,
       ' '
     );
 
   // 3. Determine Transaction Type (Debit -> 'expense', Credit -> 'income')
-  // Check explicit debit and credit keywords and their earliest match position
-  const debitRegex =
-    /\b(?:debited|withdrawn|withdrawal|spent|paid|sent|purchased|purchase|charged|deducted|dr\.?\b|debit\b|auto[\s-]?debited)/i;
-  const creditRegex =
-    /\b(?:credited|deposited|deposit|received|refunded|refund|added|cr\.?\b|credit\b|cashback\s+of)/i;
+  // Explicit user-account Credit indicators (high confidence income)
+  const explicitCreditRegex =
+    /\b(?:credited|deposited|refunded|reimbursed|cashback\s+(?:of|received|credited)|money\s+received|payment\s+received|amount\s+received|received\s+(?:in|into|from|via|by)|added\s+(?:to|in|into)\s+(?:your\s+)?(?:a\/?c|acct|account|wallet|bank)|(?:sent|transferred|paid)\s+to\s+your\s+(?:a\/?c|acct|account|wallet|bank)|(?:a\/?c|acct|account|wallet)\s+(?:is\s+|has\s+been\s+)?cr\.?\b|cr\.?\s+(?:to|in|by|with)\s+(?:your\s+)?(?:a\/?c|acct|account)|credit\s+(?:of|by|with|for|in|to|alert)\b)/i;
 
-  const debitMatch = debitRegex.exec(sanitizedForAmount);
-  const creditMatch = creditRegex.exec(sanitizedForAmount);
+  // Explicit user-account Debit indicators (high confidence expense)
+  const explicitDebitRegex =
+    /\b(?:debited|withdrawn|withdrawal|deducted|spent|purchased|charged|auto[\s-]?debited|(?:a\/?c|acct|account|wallet|card)\s+(?:is\s+|has\s+been\s+)?dr\.?\b|dr\.?\s+from\s+(?:your\s+)?(?:a\/?c|acct|account)|debit\s+(?:of|by|with|for|from|alert)\b)/i;
 
-  if (!debitMatch && !creditMatch) {
+  // Secondary Credit / Debit keywords (used only if explicit indicators are absent)
+  const secondaryCreditRegex = /\b(?:received|deposit|refund|added|credit|cr\b)\b/i;
+  const secondaryDebitRegex = /\b(?:paid|sent|transferred|purchase|payment\s+of|payment\s+to)\b/i;
+
+  const userAccountCreditedRegex =
+    /(?:credited\s+(?:to|in|into|by|with)\s+(?:your\s+)?(?:a\/?c|acct|account)?|your\s+(?:a\/?c|acct|account).*?\b(?:credited|deposited|cr)\b)/i;
+  const userAccountDebitedRegex =
+    /(?:debited\s+from\s+(?:your\s+)?(?:a\/?c|acct|account)|your\s+(?:a\/?c|acct|account).*?\bdebited\b)/i;
+
+  const expCreditMatch = explicitCreditRegex.exec(sanitized);
+  const expDebitMatch = explicitDebitRegex.exec(sanitized);
+
+  let detectedType: TransactionType | null = null;
+
+  if (expCreditMatch && expDebitMatch) {
+    const userCredited = userAccountCreditedRegex.test(sanitized);
+    const userDebited = userAccountDebitedRegex.test(sanitized);
+    if (userCredited && !userDebited) {
+      detectedType = 'income';
+    } else if (userDebited && !userCredited) {
+      detectedType = 'expense';
+    } else {
+      detectedType = expCreditMatch.index < expDebitMatch.index ? 'income' : 'expense';
+    }
+  } else if (expCreditMatch) {
+    // Even if "sent" or "paid" appears (e.g., "Rs 500 sent by Rahul is credited to your A/c"),
+    // explicit credit ("credited", "deposited", "received in", etc.) ALWAYS wins as income!
+    detectedType = 'income';
+  } else if (expDebitMatch) {
+    detectedType = 'expense';
+  } else {
+    const secCreditMatch = secondaryCreditRegex.exec(sanitized);
+    const secDebitMatch = secondaryDebitRegex.exec(sanitized);
+    if (secCreditMatch && !secDebitMatch) {
+      detectedType = 'income';
+    } else if (secDebitMatch && !secCreditMatch) {
+      detectedType = 'expense';
+    } else if (secCreditMatch && secDebitMatch) {
+      detectedType = secCreditMatch.index <= secDebitMatch.index ? 'income' : 'expense';
+    }
+  }
+
+  if (!detectedType) {
     return null;
   }
 
-  let detectedType: TransactionType;
-  if (debitMatch && creditMatch) {
-    // Handle phrases like "debited from A/c ... and credited to ..." -> primary user action is the first keyword
-    detectedType = debitMatch.index <= creditMatch.index ? 'expense' : 'income';
-  } else if (debitMatch) {
-    detectedType = 'expense';
-  } else {
-    detectedType = 'income';
-  }
-
   // 4. Extract numeric transaction amount
-  // Priority A: Currency marker followed by number (e.g., Rs. 450.00, INR 1,200, ₹500, $29.99)
+  // Priority A: Currency marker followed by number (e.g., Rs. 450.00, Rs.450, INR 1,200, ₹500, $29.99)
   const currencyBeforeAmountRegex =
-    /(?:rs\.?|inr|₹|usd|\$|eur|€|gbp|£|aed|cad|aud|jpy|¥)\s*([\d,]+(?:\.\d{1,2})?)/i;
+    /(?:rs\.?|inr|₹|usd|\$|eur|€|gbp|£|aed|cad|aud|jpy|¥)\s*[:=.-]?\s*([\d,]+(?:\.\d{1,2})?)/i;
 
   // Priority B: Number followed by currency marker (e.g., 450.00 INR, 1200 Rs)
   const amountBeforeCurrencyRegex =
     /\b([\d,]+(?:\.\d{1,2})?)\s*(?:rs\.?|inr|₹|usd|\$|eur|€|gbp|£|aed|cad|aud|jpy|¥)\b/i;
 
-  // Priority C: Keyword adjacent to amount without currency symbol (e.g., "debited by 500.00", "credited with 1,500")
+  // Priority C: Keyword adjacent to amount without currency symbol (e.g., "credited by 500.00", "received 1,500")
   const keywordAdjacentAmountRegex =
-    /\b(?:debited|credited|withdrawn|deposited|spent|paid|received|sent|for|by|with|of)\s+(?:by\s+|with\s+|of\s+)?(?:rs\.?|inr|₹|\$)?\s*([\d,]+(?:\.\d{1,2})?)/i;
+    /\b(?:debited|credited|withdrawn|deposited|spent|paid|received|sent|refunded|added|amount|sum|for|by|with|of)\s+(?:by\s+|with\s+|of\s+|for\s+|to\s+|in\s+|from\s+)*(?:rs\.?|inr|₹|\$)?\s*[:=.-]?\s*([\d,]+(?:\.\d{1,2})?)/i;
 
   let rawNumberStr: string | null = null;
 
-  const matchA = currencyBeforeAmountRegex.exec(sanitizedForAmount);
+  const matchA = currencyBeforeAmountRegex.exec(sanitized);
   if (matchA && matchA[1]) {
     rawNumberStr = matchA[1];
   } else {
-    const matchB = amountBeforeCurrencyRegex.exec(sanitizedForAmount);
+    const matchB = amountBeforeCurrencyRegex.exec(sanitized);
     if (matchB && matchB[1]) {
       rawNumberStr = matchB[1];
     } else {
-      const matchC = keywordAdjacentAmountRegex.exec(sanitizedForAmount);
+      const matchC = keywordAdjacentAmountRegex.exec(sanitized);
       if (matchC && matchC[1]) {
         rawNumberStr = matchC[1];
       }
@@ -134,7 +194,7 @@ export function parseTransactionSms(
 }
 
 /**
- * Checks if the app is running inside the native Android wrapper with SMS Notification Listener support.
+ * Checks if the app is running inside the native Android wrapper with Smart SMS support.
  */
 export function isNativeSmsDetectionSupported(): boolean {
   const bridge = getNativeBridge();
@@ -146,7 +206,7 @@ export function isNativeSmsDetectionSupported(): boolean {
 }
 
 /**
- * Checks whether Android Notification Listener permission is enabled for Busy Bees.
+ * Checks whether Android SMS permission (either 1-tap Runtime SMS permission or Notification Listener) is granted.
  */
 export function isSmsNotificationAccessGranted(): boolean {
   try {
@@ -160,12 +220,45 @@ export function isSmsNotificationAccessGranted(): boolean {
   return false;
 }
 
+export function isOverlayBubblePermissionGranted(): boolean {
+  try {
+    const bridge = getNativeBridge();
+    if (bridge && typeof bridge.isOverlayBubblePermissionGranted === 'function') {
+      return Boolean(bridge.isOverlayBubblePermissionGranted());
+    }
+  } catch {
+    // ignore
+  }
+  return false;
+}
+
+export function requestOverlayBubblePermission(): void {
+  try {
+    const bridge = getNativeBridge();
+    if (bridge && typeof bridge.requestOverlayBubblePermission === 'function') {
+      bridge.requestOverlayBubblePermission();
+    }
+  } catch {
+    // ignore
+  }
+}
+
 /**
- * Opens Android System Settings -> Notification Access so the user can toggle Busy Bees ON.
+ * Requests standard 1-tap in-app Android runtime SMS & Notification permissions (Truecaller-style,
+ * no Restricted Settings required), falling back to Notification Listener settings if already granted.
  */
 export function openSmsNotificationAccessSettings(): void {
   try {
     const bridge = getNativeBridge();
+    if (bridge && typeof bridge.requestSmsRuntimePermission === 'function') {
+      const alreadyDirect =
+        typeof bridge.isDirectSmsPermissionGranted === 'function' &&
+        bridge.isDirectSmsPermissionGranted();
+      if (!alreadyDirect) {
+        bridge.requestSmsRuntimePermission();
+        return;
+      }
+    }
     if (bridge && typeof bridge.openSmsNotificationAccessSettings === 'function') {
       bridge.openSmsNotificationAccessSettings();
     }
@@ -175,7 +268,7 @@ export function openSmsNotificationAccessSettings(): void {
 }
 
 /**
- * Syncs the user's SMS Auto-Detect toggle state with the native Android NotificationListenerService.
+ * Syncs the user's SMS Auto-Detect toggle state with the native Android service.
  */
 export function syncNativeSmsAutoDetectEnabled(enabled: boolean): void {
   try {
@@ -189,7 +282,7 @@ export function syncNativeSmsAutoDetectEnabled(enabled: boolean): void {
 }
 
 /**
- * Drains any sanitized transactions queued by the native Android NotificationListenerService
+ * Drains any sanitized transactions queued by the native Android SMS receiver/service
  * while the app was in the background or closed.
  */
 export function consumeNativePendingSmsTransactions(): DetectedSmsTransaction[] {
@@ -219,6 +312,44 @@ export function consumeNativePendingSmsTransactions(): DetectedSmsTransaction[] 
   } catch {
     return [];
   }
+}
+
+/**
+ * Drains any direct notification button action ("save" or "edit") tapped on the Android
+ * Truecaller-style large drawer notification.
+ */
+export function consumeNativeNotificationAction(): {
+  action: 'save' | 'edit';
+  id: string;
+  type: TransactionType;
+  amount: number;
+} | null {
+  try {
+    const bridge = getNativeBridge();
+    if (!bridge || typeof bridge.consumePendingNotificationAction !== 'function') {
+      return null;
+    }
+    const raw = bridge.consumePendingNotificationAction();
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (
+      parsed &&
+      (parsed.action === 'save' || parsed.action === 'edit') &&
+      (parsed.type === 'income' || parsed.type === 'expense') &&
+      typeof parsed.amount === 'number' &&
+      parsed.amount > 0
+    ) {
+      return {
+        action: parsed.action,
+        id: String(parsed.id || ''),
+        type: parsed.type,
+        amount: Math.round(Number(parsed.amount) * 100) / 100,
+      };
+    }
+  } catch {
+    // ignore
+  }
+  return null;
 }
 
 /**

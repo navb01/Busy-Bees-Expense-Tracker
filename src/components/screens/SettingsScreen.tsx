@@ -10,14 +10,12 @@ import {
   Delete,
   MessageSquare,
   ShieldCheck,
-  Sparkles,
 } from 'lucide-react';
 import {
   AppearanceMode,
   AppSettings,
   CURRENCY_CONFIGS,
   CurrencyCode,
-  TransactionType,
   WeekStartDay,
 } from '../../types';
 import { notificationService } from '../../services/notifications';
@@ -26,9 +24,10 @@ import { formatBackupTimestamp } from '../../services/googleDriveBackup';
 import { authenticateWithBiometrics, isBiometricSupported } from '../../services/biometricAuth';
 import {
   isNativeSmsDetectionSupported,
+  isOverlayBubblePermissionGranted,
   isSmsNotificationAccessGranted,
   openSmsNotificationAccessSettings,
-  parseTransactionSms,
+  requestOverlayBubblePermission,
   syncNativeSmsAutoDetectEnabled,
 } from '../../services/smsTransactionParser';
 
@@ -37,7 +36,6 @@ interface SettingsScreenProps {
   onUpdateSettings: (updates: Partial<AppSettings>) => void;
   onOpenBackup?: () => void;
   onShowToast?: (msg: string) => void;
-  onSimulateOrScanSms?: (detected: { type: TransactionType; amount: number }) => void;
 }
 
 type PinModalMode =
@@ -54,15 +52,12 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   onUpdateSettings,
   onOpenBackup,
   onShowToast,
-  onSimulateOrScanSms,
 }) => {
   const [currencyModalOpen, setCurrencyModalOpen] = useState(false);
   const [appearanceModalOpen, setAppearanceModalOpen] = useState(false);
-  const [smsScannerModalOpen, setSmsScannerModalOpen] = useState(false);
-  const [smsPasteInput, setSmsPasteInput] = useState('');
-  const [smsParseError, setSmsParseError] = useState<string | null>(null);
   const [nativeSmsSupported, setNativeSmsSupported] = useState(false);
   const [nativeSmsAccessGranted, setNativeSmsAccessGranted] = useState(false);
+  const [overlayBubbleGranted, setOverlayBubbleGranted] = useState(false);
 
   // PIN Setup / Change / Verify Modal state
   const [pinModalMode, setPinModalMode] = useState<PinModalMode>(null);
@@ -89,17 +84,20 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
       setNativeSmsSupported(supported);
       if (supported) {
         setNativeSmsAccessGranted(isSmsNotificationAccessGranted());
+        setOverlayBubbleGranted(isOverlayBubblePermissionGranted());
       }
     };
 
     refreshSmsAccess();
     window.addEventListener('focus', refreshSmsAccess);
     document.addEventListener('visibilitychange', refreshSmsAccess);
+    window.addEventListener('bb-sms-permission-changed', refreshSmsAccess);
 
     return () => {
       mounted = false;
       window.removeEventListener('focus', refreshSmsAccess);
       document.removeEventListener('visibilitychange', refreshSmsAccess);
+      window.removeEventListener('bb-sms-permission-changed', refreshSmsAccess);
     };
   }, []);
 
@@ -544,58 +542,57 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
             </div>
           </div>
 
-          {settings.smsAutoDetectEnabled !== false && (
+          {settings.smsAutoDetectEnabled !== false && nativeSmsSupported && (
             <>
-              {/* Android Notification Access Status / Button */}
-              {nativeSmsSupported && (
-                <div className="p-4 flex items-center justify-between gap-3">
-                  <div className="min-w-0">
-                    <span className="block text-[14px] text-slate-800 dark:text-slate-100 font-medium">
-                      Android SMS Notification Access
-                    </span>
-                    <span className="block text-xs text-slate-400 dark:text-slate-400 mt-0.5">
-                      {nativeSmsAccessGranted
-                        ? 'Active — Listening for transaction SMS notifications'
-                        : 'Required for automatic background SMS detection'}
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => openSmsNotificationAccessSettings()}
-                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold shrink-0 transition ${
-                      nativeSmsAccessGranted
-                        ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
-                        : 'bg-[#2357A4] hover:bg-[#1D4A8C] text-white'
-                    }`}
-                  >
-                    {nativeSmsAccessGranted ? 'Connected' : 'Grant Access'}
-                  </button>
+              {/* Android Smart SMS Permission Status / Button */}
+              <div className="p-4 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <span className="block text-[14px] text-slate-800 dark:text-slate-100 font-medium">
+                    Android Smart SMS Permission
+                  </span>
+                  <span className="block text-xs text-slate-400 dark:text-slate-400 mt-0.5">
+                    {nativeSmsAccessGranted
+                      ? 'Active — Detecting incoming Debit & Credit SMS'
+                      : 'One-tap permission for automatic SMS detection'}
+                  </span>
                 </div>
-              )}
+                <button
+                  type="button"
+                  onClick={() => openSmsNotificationAccessSettings()}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold shrink-0 transition ${
+                    nativeSmsAccessGranted
+                      ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                      : 'bg-[#2357A4] hover:bg-[#1D4A8C] text-white'
+                  }`}
+                >
+                  {nativeSmsAccessGranted ? 'Connected' : 'Grant Access'}
+                </button>
+              </div>
 
-              {/* Scan Copied SMS Button */}
-              <button
-                type="button"
-                onClick={() => {
-                  setSmsPasteInput('');
-                  setSmsParseError(null);
-                  setSmsScannerModalOpen(true);
-                }}
-                className="w-full flex items-center justify-between p-4 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition text-left"
-              >
-                <div className="flex items-center gap-2.5">
-                  <Sparkles className="w-4 h-4 text-[#2357A4] dark:text-blue-400" />
-                  <div>
-                    <span className="block text-[14px] text-slate-800 dark:text-slate-100 font-medium">
-                      Scan Copied SMS
-                    </span>
-                    <span className="block text-xs text-slate-400 dark:text-slate-400 mt-0.5">
-                      Paste a transaction SMS to extract Debit/Credit and Amount
-                    </span>
-                  </div>
+              {/* Floating Bubble Overlay Permission Row */}
+              <div className="p-4 flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <span className="block text-[14px] text-slate-800 dark:text-slate-100 font-medium">
+                    Floating Bubble Overlay
+                  </span>
+                  <span className="block text-xs text-slate-400 dark:text-slate-400 mt-0.5">
+                    {overlayBubbleGranted
+                      ? 'Active — Shows draggable bubble over other apps'
+                      : 'Show FB Messenger-style floating bubble over apps'}
+                  </span>
                 </div>
-                <ChevronRight className="w-4 h-4 text-slate-400 dark:text-slate-500 shrink-0" />
-              </button>
+                <button
+                  type="button"
+                  onClick={() => requestOverlayBubblePermission()}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-semibold shrink-0 transition ${
+                    overlayBubbleGranted
+                      ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                      : 'bg-[#2357A4] hover:bg-[#1D4A8C] text-white'
+                  }`}
+                >
+                  {overlayBubbleGranted ? 'Enabled' : 'Enable Bubble'}
+                </button>
+              </div>
             </>
           )}
         </div>
@@ -638,74 +635,6 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
       <div className="pt-2 text-center">
         <p className="text-xs text-slate-400 dark:text-slate-500">Your preferences are saved automatically.</p>
       </div>
-
-      {/* Scan Copied SMS Modal */}
-      {smsScannerModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/65 backdrop-blur-xs">
-          <div className="w-full max-w-sm bg-white dark:bg-slate-800 rounded-3xl p-5 shadow-2xl border border-slate-100 dark:border-slate-700 space-y-4 animate-in fade-in zoom-in-95">
-            <div className="flex items-center justify-between">
-              <h3 className="font-bold text-slate-900 dark:text-slate-100 text-base">
-                Scan Copied SMS
-              </h3>
-              <button
-                type="button"
-                onClick={() => setSmsScannerModalOpen(false)}
-                className="text-xs font-medium text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-              >
-                Close
-              </button>
-            </div>
-
-            <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed">
-              Paste a transaction SMS below to extract only the Debit/Credit status and Amount on-device.
-            </p>
-
-            <div>
-              <textarea
-                rows={3}
-                value={smsPasteInput}
-                onChange={(e) => {
-                  setSmsPasteInput(e.target.value);
-                  setSmsParseError(null);
-                }}
-                placeholder="Paste transaction SMS text here..."
-                className="w-full px-3.5 py-2.5 rounded-2xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 text-xs text-slate-800 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-blue-500/20 resize-none"
-              />
-              {smsParseError && (
-                <p className="text-xs text-rose-500 font-medium mt-1.5">{smsParseError}</p>
-              )}
-            </div>
-
-            <div className="flex gap-2.5 pt-1">
-              <button
-                type="button"
-                onClick={() => setSmsScannerModalOpen(false)}
-                className="flex-1 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-xs font-semibold hover:bg-slate-50 dark:hover:bg-slate-700 transition"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const parsed = parseTransactionSms(smsPasteInput);
-                  if (!parsed) {
-                    setSmsParseError(
-                      'No valid Debit/Credit transaction amount detected in this message.'
-                    );
-                    return;
-                  }
-                  setSmsPasteInput('');
-                  setSmsScannerModalOpen(false);
-                  onSimulateOrScanSms?.(parsed);
-                }}
-                className="flex-1 py-2.5 rounded-xl bg-[#2357A4] hover:bg-[#1D4A8C] text-white text-xs font-semibold transition"
-              >
-                Detect Transaction
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* PIN Setup / Change / Verify Modal */}
       {pinModalMode && (

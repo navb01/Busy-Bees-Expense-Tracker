@@ -9,6 +9,8 @@ import {
   findCloudBackup,
   formatBackupTimestamp,
   formatBytes,
+  isNativeDriveBridgeAvailable,
+  pickAndDownloadNativeBackup,
 } from '../../services/googleDriveBackup';
 
 interface WelcomeScreenProps {
@@ -65,6 +67,15 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
       const { user, accessToken } = await connectGoogleAccount(true);
       const fileInfo = await findCloudBackup(accessToken);
       if (!fileInfo) {
+        if (isNativeDriveBridgeAvailable()) {
+          const picked = await pickAndDownloadNativeBackup();
+          setFoundBackup({
+            fileInfo: picked.fileInfo,
+            snapshot: picked.snapshot,
+            email: user.email || '',
+          });
+          return;
+        }
         setCloudError(
           `No Busy Bees backup was found in Google Drive for ${user.email || 'this account'}. You can set up your profile below.`
         );

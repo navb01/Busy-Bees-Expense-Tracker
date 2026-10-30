@@ -1,12 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <uses-feature
+        android:name="android.hardware.telephony"
+        android:required="false" />
+
     <application
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="false"
         android:theme="@style/AppTheme">
 
         <activity
@@ -34,6 +39,31 @@
                 android:resource="@xml/file_paths"></meta-data>
         </provider>
 
+        <!-- Direct Incoming SMS BroadcastReceiver (Truecaller-style 1-tap runtime permission, only triggers on received SMS) -->
+        <receiver
+            android:name=".SmsBroadcastReceiver"
+            android:permission="android.permission.BROADCAST_SMS"
+            android:exported="true">
+            <intent-filter android:priority="999">
+                <action android:name="android.provider.Telephony.SMS_RECEIVED" />
+            </intent-filter>
+        </receiver>
+
+        <!-- Notification Drawer Button Action Receiver (Save / Edit / Ignore) -->
+        <receiver
+            android:name=".SmsNotificationActionReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.busybees.expensetracker.SMS_NOTIFICATION_ACTION" />
+            </intent-filter>
+        </receiver>
+
+        <!-- FB Messenger-Style Draggable Floating Bubble Service -->
+        <service
+            android:name=".SmsFloatingBubbleService"
+            android:exported="false" />
+
+        <!-- NotificationListenerService for RCS / Messaging Notifications -->
         <service
             android:name=".SmsNotificationListenerService"
             android:label="@string/app_name"
@@ -46,8 +76,9 @@
     </application>
 
     <!-- Permissions -->
-
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.USE_BIOMETRIC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_SMS" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 </manifest>
