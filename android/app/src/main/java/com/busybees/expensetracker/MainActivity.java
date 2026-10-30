@@ -349,7 +349,7 @@ public class MainActivity extends BridgeActivity {
         // Prompt for runtime SMS + Notification permission if auto-detect is enabled
         SharedPreferences smsPrefs = getSharedPreferences(SmsTransactionProcessor.PREFS_NAME, Context.MODE_PRIVATE);
         if (smsPrefs.getBoolean(SmsTransactionProcessor.KEY_AUTO_DETECT_ENABLED, true)) {
-            if (!isDirectSmsPermissionGranted()) {
+            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECEIVE_SMS) != PackageManager.PERMISSION_GRANTED) {
                 promptForSmsAndNotificationPermissions();
             }
         }

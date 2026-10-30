@@ -355,7 +355,7 @@ public final class SmsTransactionProcessor {
                 );
                 channel.setDescription("Truecaller-style large drawer popup for detected SMS transactions");
                 channel.enableVibration(true);
-                channel.setLockScreenVisibility(Notification.VISIBILITY_PUBLIC);
+                channel.setLockscreenVisibility(Notification.VISIBILITY_PUBLIC);
                 nm.createNotificationChannel(channel);
             }
 
