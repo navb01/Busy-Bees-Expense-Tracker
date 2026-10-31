@@ -32,23 +32,20 @@ jobs:
           VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
         run: npm run build
 
-      - name: Initialize Android Platform and Apply BB App Icon
+      - name: Sync Android Platform and Apply Rupee-Bee App Icon
         run: |
           if [ ! -d "android" ]; then
             npx cap add android
           fi
           npx cap sync android
 
-          # Apply BB app icon across all Android mipmap directories
-          ICON_SRC="public/pwa-512x512.png"
-          if [ -f "public/assets/aistudio/BB_logo_512x512_a9c1fff0.png" ]; then
-            ICON_SRC="public/assets/aistudio/BB_logo_512x512_a9c1fff0.png"
-          fi
+          # Rasterize public/icon.svg for legacy mipmap PNGs while keeping vector ic_launcher_foreground.xml intact
+          sudo apt-get update && sudo apt-get install -y librsvg2-bin
+          rsvg-convert -w 512 -h 512 public/icon.svg -o public/pwa-512x512.png
           for dir in android/app/src/main/res/mipmap-mdpi android/app/src/main/res/mipmap-hdpi android/app/src/main/res/mipmap-xhdpi android/app/src/main/res/mipmap-xxhdpi android/app/src/main/res/mipmap-xxxhdpi; do
             if [ -d "$dir" ]; then
-              cp "$ICON_SRC" "$dir/ic_launcher.png"
-              cp "$ICON_SRC" "$dir/ic_launcher_round.png"
-              cp "$ICON_SRC" "$dir/ic_launcher_foreground.png"
+              cp public/pwa-512x512.png "$dir/ic_launcher.png"
+              cp public/pwa-512x512.png "$dir/ic_launcher_round.png"
             fi
           done
 

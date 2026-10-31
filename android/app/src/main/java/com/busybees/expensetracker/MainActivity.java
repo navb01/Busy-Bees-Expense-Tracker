@@ -1,7 +1,9 @@
 package com.busybees.expensetracker;
 
 import android.Manifest;
+import android.accounts.Account;
 import android.accounts.AccountManager;
+import android.accounts.AccountManagerFuture;
 import android.app.Activity;
 import android.app.NotificationManager;
 import android.app.backup.BackupManager;
@@ -14,6 +16,7 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
+import android.content.UriPermission;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.graphics.Canvas;
@@ -50,11 +53,15 @@ import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
@@ -70,6 +77,7 @@ public class MainActivity extends BridgeActivity {
     private static final String KEY_DRIVE_EMAIL = "connected_google_email";
     private static final String KEY_DRIVE_LAST_JSON = "cached_backup_json";
     private static final String KEY_DRIVE_LAST_MODIFIED = "cached_backup_modified_ms";
+    private static final String KEY_DRIVE_PERSISTED_URI = "persisted_drive_file_uri";
     private static final String KEY_PENDING_NOTIF_ACTION = "pending_notif_action_json";
 
     private String pendingBackupJsonToWrite = null;
@@ -411,10 +419,29 @@ public class MainActivity extends BridgeActivity {
                 }
 
                 @JavascriptInterface
-                public void openGoogleDriveRestorePicker() {
-                    // Restore silently in the background without opening any file picker window
+                public void scanCloudBackupInBackground() {
                     new Thread(() -> {
-                        String json = readInternalBackupCopy();
+                        String json = readInternalBackupCopyWithCloudFallback();
+                        if (json != null && !json.trim().isEmpty()) {
+                            SharedPreferences prefs = getSharedPreferences(DRIVE_PREFS_NAME, Context.MODE_PRIVATE);
+                            long modTime = prefs.getLong(KEY_DRIVE_LAST_MODIFIED, System.currentTimeMillis());
+                            int sizeBytes = json.getBytes(StandardCharsets.UTF_8).length;
+                            runOnUiThread(() ->
+                                dispatchDriveEvent("bb-native-drive-scan-result", true, "", modTime, sizeBytes)
+                            );
+                        } else {
+                            runOnUiThread(() ->
+                                dispatchDriveEvent("bb-native-drive-scan-result", false, "NOT_FOUND", 0L, 0)
+                            );
+                        }
+                    }).start();
+                }
+
+                @JavascriptInterface
+                public void openGoogleDriveRestorePicker() {
+                    // Always scan and restore silently in the background without opening any Google Drive window
+                    new Thread(() -> {
+                        String json = readInternalBackupCopyWithCloudFallback();
                         if (json != null && !json.trim().isEmpty()) {
                             runOnUiThread(() -> dispatchDriveRestoreResult(true, json, ""));
                         } else {
@@ -428,9 +455,11 @@ public class MainActivity extends BridgeActivity {
                     new Thread(() -> {
                         try {
                             SharedPreferences prefs = getSharedPreferences(DRIVE_PREFS_NAME, Context.MODE_PRIVATE);
+                            String email = prefs.getString(KEY_DRIVE_EMAIL, "");
                             prefs.edit()
                                 .remove(KEY_DRIVE_LAST_JSON)
                                 .remove(KEY_DRIVE_LAST_MODIFIED)
+                                .remove(KEY_DRIVE_PERSISTED_URI)
                                 .apply();
                             File f = new File(getFilesDir(), "busy_bees_expense_tracker_backup.json");
                             if (f.exists()) {
@@ -445,7 +474,11 @@ public class MainActivity extends BridgeActivity {
                                     extFile.delete();
                                 }
                             }
+                            deleteSharedSurvivalBackupCopies();
                             deleteMediaStoreBackupCopy();
+                            if (email != null && !email.isEmpty()) {
+                                deleteFromGoogleDriveRestApi(email);
+                            }
                         } catch (Exception ignored) {
                         }
                     }).start();
@@ -734,6 +767,11 @@ public class MainActivity extends BridgeActivity {
             intent.setType("*/*");
             String[] mimeTypes = new String[]{"application/json", "text/plain", "application/octet-stream"};
             intent.putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes);
+            intent.addFlags(
+                Intent.FLAG_GRANT_READ_URI_PERMISSION |
+                Intent.FLAG_GRANT_WRITE_URI_PERMISSION |
+                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+            );
 
             if (isPackageInstalled("com.google.android.apps.docs")) {
                 intent.setPackage("com.google.android.apps.docs");
@@ -744,9 +782,14 @@ public class MainActivity extends BridgeActivity {
                 Intent fallback = new Intent(Intent.ACTION_OPEN_DOCUMENT);
                 fallback.addCategory(Intent.CATEGORY_OPENABLE);
                 fallback.setType("*/*");
+                fallback.addFlags(
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION |
+                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION |
+                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                );
                 startActivityForResult(fallback, REQ_CODE_DRIVE_OPEN_DOC);
             } catch (Exception ex) {
-                dispatchDriveRestoreResult(false, "", "Could not open Google Drive file picker.");
+                dispatchDriveRestoreResult(false, "", "No backup file found for this account.");
             }
         }
     }
@@ -785,7 +828,8 @@ public class MainActivity extends BridgeActivity {
 
             if (resultCode == Activity.RESULT_OK && data != null && data.getData() != null && content != null) {
                 Uri uri = data.getData();
-                try (OutputStream os = getContentResolver().openOutputStream(uri)) {
+                persistDriveUriPermission(uri);
+                try (OutputStream os = getContentResolver().openOutputStream(uri, "wt")) {
                     if (os != null) {
                         byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
                         os.write(bytes);
@@ -799,7 +843,6 @@ public class MainActivity extends BridgeActivity {
                     return;
                 }
             }
-            // Even if user closed the optional external file sheet, internal backup copy is saved
             if (content != null) {
                 byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
                 dispatchDriveEvent("bb-native-drive-backup-result", true, "", now, bytes.length);
@@ -812,6 +855,7 @@ public class MainActivity extends BridgeActivity {
         if (requestCode == REQ_CODE_DRIVE_OPEN_DOC) {
             if (resultCode == Activity.RESULT_OK && data != null && data.getData() != null) {
                 Uri uri = data.getData();
+                persistDriveUriPermission(uri);
                 try (InputStream is = getContentResolver().openInputStream(uri)) {
                     if (is != null) {
                         BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
@@ -1184,12 +1228,359 @@ public class MainActivity extends BridgeActivity {
         return text.substring(0, len) + ellipsis;
     }
 
+    private void persistDriveUriPermission(Uri uri) {
+        if (uri == null) return;
+        try {
+            int takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
+            getContentResolver().takePersistableUriPermission(uri, takeFlags);
+        } catch (Exception ignored) {
+            try {
+                getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            } catch (Exception ignored2) {
+            }
+        }
+        try {
+            SharedPreferences prefs = getSharedPreferences(DRIVE_PREFS_NAME, Context.MODE_PRIVATE);
+            prefs.edit().putString(KEY_DRIVE_PERSISTED_URI, uri.toString()).apply();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void saveSharedSurvivalBackupCopy(byte[] bytes) {
+        String[] dirs = new String[]{
+            Environment.DIRECTORY_DOWNLOADS,
+            Environment.DIRECTORY_DOCUMENTS
+        };
+        for (String dirType : dirs) {
+            try {
+                File pubRoot = Environment.getExternalStoragePublicDirectory(dirType);
+                if (pubRoot != null) {
+                    File bbDir = new File(pubRoot, "BusyBeesBackup");
+                    if (!bbDir.exists()) {
+                        //noinspection ResultOfMethodCallIgnored
+                        bbDir.mkdirs();
+                    }
+                    File target = new File(bbDir, "busy_bees_expense_tracker_backup.json");
+                    try (FileOutputStream fos = new FileOutputStream(target, false)) {
+                        fos.write(bytes);
+                        fos.flush();
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        // Also write to Android/media/com.busybees.expensetracker
+        try {
+            File[] mediaDirs = getExternalMediaDirs();
+            if (mediaDirs != null) {
+                for (File mDir : mediaDirs) {
+                    if (mDir != null) {
+                        if (!mDir.exists()) {
+                            //noinspection ResultOfMethodCallIgnored
+                            mDir.mkdirs();
+                        }
+                        File target = new File(mDir, "busy_bees_expense_tracker_backup.json");
+                        try (FileOutputStream fos = new FileOutputStream(target, false)) {
+                            fos.write(bytes);
+                            fos.flush();
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void deleteSharedSurvivalBackupCopies() {
+        String[] dirs = new String[]{
+            Environment.DIRECTORY_DOWNLOADS,
+            Environment.DIRECTORY_DOCUMENTS
+        };
+        for (String dirType : dirs) {
+            try {
+                File pubRoot = Environment.getExternalStoragePublicDirectory(dirType);
+                if (pubRoot != null) {
+                    File target = new File(new File(pubRoot, "BusyBeesBackup"), "busy_bees_expense_tracker_backup.json");
+                    if (target.exists()) {
+                        //noinspection ResultOfMethodCallIgnored
+                        target.delete();
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        try {
+            File[] mediaDirs = getExternalMediaDirs();
+            if (mediaDirs != null) {
+                for (File mDir : mediaDirs) {
+                    if (mDir != null) {
+                        File target = new File(mDir, "busy_bees_expense_tracker_backup.json");
+                        if (target.exists()) {
+                            //noinspection ResultOfMethodCallIgnored
+                            target.delete();
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private String readFileToString(File file) {
+        if (file == null || !file.exists() || file.length() <= 0) return "";
+        try (FileInputStream fis = new FileInputStream(file)) {
+            BufferedReader reader = new BufferedReader(new InputStreamReader(fis, StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) {
+                sb.append(line).append("\n");
+            }
+            return sb.toString().trim();
+        } catch (Exception e) {
+            return "";
+        }
+    }
+
+    private String readSharedSurvivalBackupCopy() {
+        // Check Android/media/com.busybees.expensetracker first
+        try {
+            File[] mediaDirs = getExternalMediaDirs();
+            if (mediaDirs != null) {
+                for (File mDir : mediaDirs) {
+                    if (mDir != null) {
+                        File target = new File(mDir, "busy_bees_expense_tracker_backup.json");
+                        String content = readFileToString(target);
+                        if (!content.isEmpty()) return content;
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+
+        String[] dirs = new String[]{
+            Environment.DIRECTORY_DOWNLOADS,
+            Environment.DIRECTORY_DOCUMENTS
+        };
+        for (String dirType : dirs) {
+            try {
+                File pubRoot = Environment.getExternalStoragePublicDirectory(dirType);
+                if (pubRoot == null) continue;
+
+                // 1. Check BusyBeesBackup/busy_bees_expense_tracker_backup.json
+                File bbFile = new File(new File(pubRoot, "BusyBeesBackup"), "busy_bees_expense_tracker_backup.json");
+                String content = readFileToString(bbFile);
+                if (!content.isEmpty()) return content;
+
+                // 2. Check direct Download/busy_bees_expense_tracker_backup.json
+                File directFile = new File(pubRoot, "busy_bees_expense_tracker_backup.json");
+                content = readFileToString(directFile);
+                if (!content.isEmpty()) return content;
+
+                // 3. Scan directory for any matching busy_bees_expense_tracker_backup*.json
+                File[] children = pubRoot.listFiles();
+                if (children != null) {
+                    File newestMatch = null;
+                    for (File child : children) {
+                        if (child != null && child.isFile()) {
+                            String name = child.getName().toLowerCase(Locale.US);
+                            if (name.startsWith("busy_bees_expense_tracker_backup") && name.endsWith(".json")) {
+                                if (newestMatch == null || child.lastModified() > newestMatch.lastModified()) {
+                                    newestMatch = child;
+                                }
+                            }
+                        }
+                    }
+                    if (newestMatch != null) {
+                        content = readFileToString(newestMatch);
+                        if (!content.isEmpty()) return content;
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return "";
+    }
+
+    private String tryGetGoogleDriveToken(String email) {
+        if (email == null || email.trim().isEmpty()) return "";
+        String[] scopesToTry = new String[]{
+            "oauth2:https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.appdata",
+            "oauth2:https://www.googleapis.com/auth/drive"
+        };
+        Account account = new Account(email.trim(), "com.google");
+        AccountManager am = AccountManager.get(this);
+        for (String scope : scopesToTry) {
+            try {
+                AccountManagerFuture<Bundle> future = am.getAuthToken(
+                    account,
+                    scope,
+                    null,
+                    this,
+                    null,
+                    null
+                );
+                Bundle result = future.getResult(5, TimeUnit.SECONDS);
+                if (result != null) {
+                    String token = result.getString(AccountManager.KEY_AUTHTOKEN);
+                    if (token != null && !token.trim().isEmpty()) {
+                        return token.trim();
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return "";
+    }
+
+    private void uploadToGoogleDriveRestApi(String email, String jsonContent) {
+        String token = tryGetGoogleDriveToken(email);
+        if (token.isEmpty()) return;
+        try {
+            byte[] bytes = jsonContent.getBytes(StandardCharsets.UTF_8);
+            String existingFileId = findFileIdOnGoogleDriveRestApi(token);
+            if (!existingFileId.isEmpty()) {
+                URL updateUrl = new URL("https://www.googleapis.com/upload/drive/v3/files/" + existingFileId + "?uploadType=media");
+                HttpURLConnection conn = (HttpURLConnection) updateUrl.openConnection();
+                conn.setRequestMethod("PATCH");
+                conn.setConnectTimeout(6000);
+                conn.setReadTimeout(6000);
+                conn.setDoOutput(true);
+                conn.setRequestProperty("Authorization", "Bearer " + token);
+                conn.setRequestProperty("Content-Type", "application/json; charset=UTF-8");
+                try (OutputStream os = conn.getOutputStream()) {
+                    os.write(bytes);
+                    os.flush();
+                }
+                conn.getResponseCode();
+                conn.disconnect();
+            } else {
+                String boundary = "bb_drive_boundary_" + System.currentTimeMillis();
+                String metadataJson = "{\"name\":\"busy_bees_expense_tracker_backup.json\",\"mimeType\":\"application/json\"}";
+                String multipart = "--" + boundary + "\r\n"
+                    + "Content-Type: application/json; charset=UTF-8\r\n\r\n"
+                    + metadataJson + "\r\n"
+                    + "--" + boundary + "\r\n"
+                    + "Content-Type: application/json; charset=UTF-8\r\n\r\n"
+                    + jsonContent + "\r\n"
+                    + "--" + boundary + "--";
+                URL createUrl = new URL("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart");
+                HttpURLConnection conn = (HttpURLConnection) createUrl.openConnection();
+                conn.setRequestMethod("POST");
+                conn.setConnectTimeout(6000);
+                conn.setReadTimeout(6000);
+                conn.setDoOutput(true);
+                conn.setRequestProperty("Authorization", "Bearer " + token);
+                conn.setRequestProperty("Content-Type", "multipart/related; boundary=" + boundary);
+                try (OutputStream os = conn.getOutputStream()) {
+                    os.write(multipart.getBytes(StandardCharsets.UTF_8));
+                    os.flush();
+                }
+                conn.getResponseCode();
+                conn.disconnect();
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private String findFileIdOnGoogleDriveRestApi(String token) {
+        String[] spaces = new String[]{"appDataFolder", "drive"};
+        for (String space : spaces) {
+            try {
+                String q = URLEncoder.encode("name contains 'busy_bees_expense_tracker_backup' and trashed = false", "UTF-8");
+                String urlStr = "https://www.googleapis.com/drive/v3/files?spaces=" + space
+                    + "&q=" + q
+                    + "&orderBy=modifiedTime%20desc&pageSize=5&fields=files(id,name,modifiedTime,size)";
+                URL url = new URL(urlStr);
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setRequestMethod("GET");
+                conn.setConnectTimeout(5000);
+                conn.setReadTimeout(5000);
+                conn.setRequestProperty("Authorization", "Bearer " + token);
+                int code = conn.getResponseCode();
+                if (code == 200) {
+                    try (InputStream is = conn.getInputStream()) {
+                        BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
+                        StringBuilder sb = new StringBuilder();
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            sb.append(line);
+                        }
+                        JSONObject obj = new JSONObject(sb.toString());
+                        JSONArray files = obj.optJSONArray("files");
+                        if (files != null && files.length() > 0) {
+                            JSONObject first = files.optJSONObject(0);
+                            if (first != null) {
+                                String id = first.optString("id", "");
+                                if (!id.isEmpty()) {
+                                    conn.disconnect();
+                                    return id;
+                                }
+                            }
+                        }
+                    }
+                }
+                conn.disconnect();
+            } catch (Exception ignored) {
+            }
+        }
+        return "";
+    }
+
+    private String downloadFromGoogleDriveRestApi(String email) {
+        String token = tryGetGoogleDriveToken(email);
+        if (token.isEmpty()) return "";
+        try {
+            String fileId = findFileIdOnGoogleDriveRestApi(token);
+            if (fileId.isEmpty()) return "";
+            URL url = new URL("https://www.googleapis.com/drive/v3/files/" + fileId + "?alt=media");
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("GET");
+            conn.setConnectTimeout(6000);
+            conn.setReadTimeout(6000);
+            conn.setRequestProperty("Authorization", "Bearer " + token);
+            if (conn.getResponseCode() == 200) {
+                try (InputStream is = conn.getInputStream()) {
+                    BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
+                    StringBuilder sb = new StringBuilder();
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        sb.append(line).append("\n");
+                    }
+                    conn.disconnect();
+                    return sb.toString().trim();
+                }
+            }
+            conn.disconnect();
+        } catch (Exception ignored) {
+        }
+        return "";
+    }
+
+    private void deleteFromGoogleDriveRestApi(String email) {
+        String token = tryGetGoogleDriveToken(email);
+        if (token.isEmpty()) return;
+        try {
+            String fileId = findFileIdOnGoogleDriveRestApi(token);
+            if (fileId.isEmpty()) return;
+            URL url = new URL("https://www.googleapis.com/drive/v3/files/" + fileId);
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setRequestMethod("DELETE");
+            conn.setConnectTimeout(5000);
+            conn.setReadTimeout(5000);
+            conn.setRequestProperty("Authorization", "Bearer " + token);
+            conn.getResponseCode();
+            conn.disconnect();
+        } catch (Exception ignored) {
+        }
+    }
+
     private void saveInternalBackupCopy(String jsonContent, long timestampMs) {
         try {
             byte[] bytes = jsonContent.getBytes(StandardCharsets.UTF_8);
 
             // 1. SharedPreferences cache (backed up by Android Google Drive Auto-Backup)
             SharedPreferences prefs = getSharedPreferences(DRIVE_PREFS_NAME, Context.MODE_PRIVATE);
+            String email = prefs.getString(KEY_DRIVE_EMAIL, "");
             prefs.edit()
                 .putString(KEY_DRIVE_LAST_JSON, jsonContent)
                 .putLong(KEY_DRIVE_LAST_MODIFIED, timestampMs)
@@ -1212,10 +1603,30 @@ public class MainActivity extends BridgeActivity {
                 }
             }
 
-            // 4. Silent MediaStore app-scoped backup copy (replaces previous backup automatically in background)
+            // 4. Shared survival folder copy in Download/BusyBeesBackup, Documents/BusyBeesBackup & Android/media
+            saveSharedSurvivalBackupCopy(bytes);
+
+            // 5. Silent MediaStore app-scoped backup copy
             saveMediaStoreBackupCopy(bytes);
 
-            // 5. Notify Android BackupManager so Google Drive Auto-Backup syncs in background
+            // 6. If a persisted Google Drive Document URI exists, overwrite it silently in the background
+            String persistedUriStr = prefs.getString(KEY_DRIVE_PERSISTED_URI, "");
+            if (persistedUriStr != null && !persistedUriStr.isEmpty()) {
+                try (OutputStream os = getContentResolver().openOutputStream(Uri.parse(persistedUriStr), "wt")) {
+                    if (os != null) {
+                        os.write(bytes);
+                        os.flush();
+                    }
+                } catch (Exception ignored) {
+                }
+            }
+
+            // 7. Upload/overwrite on Google Drive REST API in background if Google Account token is available
+            if (email != null && !email.isEmpty()) {
+                uploadToGoogleDriveRestApi(email, jsonContent);
+            }
+
+            // 8. Notify Android BackupManager so Google Drive Auto-Backup syncs in background
             try {
                 new BackupManager(this).dataChanged();
             } catch (Exception ignored) {
@@ -1263,29 +1674,60 @@ public class MainActivity extends BridgeActivity {
 
     private String readMediaStoreBackupCopy() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return "";
-        try {
-            ContentResolver resolver = getContentResolver();
-            Uri collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
-            String[] projection = new String[]{MediaStore.MediaColumns._ID};
-            String selection = MediaStore.MediaColumns.DISPLAY_NAME + " = ?";
-            String[] selectionArgs = new String[]{"busy_bees_expense_tracker_backup.json"};
-            String sortOrder = MediaStore.MediaColumns.DATE_MODIFIED + " DESC";
-            try (Cursor cursor = resolver.query(collection, projection, selection, selectionArgs, sortOrder)) {
-                if (cursor != null && cursor.moveToFirst()) {
-                    long id = cursor.getLong(0);
-                    Uri itemUri = ContentUris.withAppendedId(collection, id);
-                    try (InputStream is = resolver.openInputStream(itemUri)) {
-                        if (is != null) {
-                            BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
-                            StringBuilder sb = new StringBuilder();
-                            String line;
-                            while ((line = reader.readLine()) != null) {
-                                sb.append(line).append("\n");
+        ContentResolver resolver = getContentResolver();
+        Uri[] collections = new Uri[]{
+            MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
+            MediaStore.Files.getContentUri("external")
+        };
+        for (Uri collection : collections) {
+            try {
+                String[] projection = new String[]{MediaStore.MediaColumns._ID};
+                String selection = MediaStore.MediaColumns.DISPLAY_NAME + " LIKE ?";
+                String[] selectionArgs = new String[]{"busy_bees_expense_tracker_backup%"};
+                String sortOrder = MediaStore.MediaColumns.DATE_MODIFIED + " DESC";
+                try (Cursor cursor = resolver.query(collection, projection, selection, selectionArgs, sortOrder)) {
+                    if (cursor != null && cursor.moveToFirst()) {
+                        long id = cursor.getLong(0);
+                        Uri itemUri = ContentUris.withAppendedId(collection, id);
+                        try (InputStream is = resolver.openInputStream(itemUri)) {
+                            if (is != null) {
+                                BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
+                                StringBuilder sb = new StringBuilder();
+                                String line;
+                                while ((line = reader.readLine()) != null) {
+                                    sb.append(line).append("\n");
+                                }
+                                String content = sb.toString().trim();
+                                if (!content.isEmpty()) return content;
                             }
-                            String content = sb.toString().trim();
-                            if (!content.isEmpty()) return content;
                         }
                     }
+                }
+            } catch (Exception ignored) {
+            }
+        }
+        return "";
+    }
+
+    private String readInternalBackupCopyWithCloudFallback() {
+        String local = readInternalBackupCopy();
+        if (local != null && !local.trim().isEmpty()) {
+            return local;
+        }
+        // Try background Google Drive REST API scan using connected Google account
+        try {
+            SharedPreferences prefs = getSharedPreferences(DRIVE_PREFS_NAME, Context.MODE_PRIVATE);
+            String email = prefs.getString(KEY_DRIVE_EMAIL, "");
+            if (email != null && !email.isEmpty()) {
+                String cloudJson = downloadFromGoogleDriveRestApi(email);
+                if (cloudJson != null && !cloudJson.trim().isEmpty()) {
+                    long now = System.currentTimeMillis();
+                    prefs.edit()
+                        .putString(KEY_DRIVE_LAST_JSON, cloudJson)
+                        .putLong(KEY_DRIVE_LAST_MODIFIED, now)
+                        .apply();
+                    saveSharedSurvivalBackupCopy(cloudJson.getBytes(StandardCharsets.UTF_8));
+                    return cloudJson;
                 }
             }
         } catch (Exception ignored) {
@@ -1297,18 +1739,8 @@ public class MainActivity extends BridgeActivity {
         try {
             // 1. Check internal filesDir
             File file = new File(getFilesDir(), "busy_bees_expense_tracker_backup.json");
-            if (file.exists() && file.length() > 0) {
-                try (FileInputStream fis = new FileInputStream(file)) {
-                    BufferedReader reader = new BufferedReader(new InputStreamReader(fis, StandardCharsets.UTF_8));
-                    StringBuilder sb = new StringBuilder();
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        sb.append(line).append("\n");
-                    }
-                    String res = sb.toString().trim();
-                    if (!res.isEmpty()) return res;
-                }
-            }
+            String res = readFileToString(file);
+            if (!res.isEmpty()) return res;
 
             // 2. Check SharedPreferences cache
             SharedPreferences prefs = getSharedPreferences(DRIVE_PREFS_NAME, Context.MODE_PRIVATE);
@@ -1317,25 +1749,61 @@ public class MainActivity extends BridgeActivity {
                 return prefJson.trim();
             }
 
-            // 3. Check external filesDir
-            File extDir = getExternalFilesDir(null);
-            if (extDir != null) {
-                File extFile = new File(extDir, "busy_bees_expense_tracker_backup.json");
-                if (extFile.exists() && extFile.length() > 0) {
-                    try (FileInputStream fis = new FileInputStream(extFile)) {
-                        BufferedReader reader = new BufferedReader(new InputStreamReader(fis, StandardCharsets.UTF_8));
+            // 3. Check persisted Google Drive Document URI (including any OS-persisted URI permissions)
+            String persistedUriStr = prefs.getString(KEY_DRIVE_PERSISTED_URI, "");
+            List<Uri> urisToCheck = new ArrayList<>();
+            if (persistedUriStr != null && !persistedUriStr.isEmpty()) {
+                urisToCheck.add(Uri.parse(persistedUriStr));
+            }
+            try {
+                for (UriPermission perm : getContentResolver().getPersistedUriPermissions()) {
+                    if (perm != null && perm.isReadPermission() && perm.getUri() != null) {
+                        urisToCheck.add(perm.getUri());
+                    }
+                }
+            } catch (Exception ignored) {
+            }
+            for (Uri u : urisToCheck) {
+                try (InputStream is = getContentResolver().openInputStream(u)) {
+                    if (is != null) {
+                        BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
                         StringBuilder sb = new StringBuilder();
                         String line;
                         while ((line = reader.readLine()) != null) {
                             sb.append(line).append("\n");
                         }
-                        String res = sb.toString().trim();
-                        if (!res.isEmpty()) return res;
+                        String driveJson = sb.toString().trim();
+                        if (!driveJson.isEmpty() && driveJson.contains("\"transactions\"")) {
+                            prefs.edit()
+                                .putString(KEY_DRIVE_LAST_JSON, driveJson)
+                                .putLong(KEY_DRIVE_LAST_MODIFIED, System.currentTimeMillis())
+                                .apply();
+                            return driveJson;
+                        }
                     }
+                } catch (Exception ignored) {
                 }
             }
 
-            // 4. Check silent MediaStore backup copy (e.g. after app reinstall)
+            // 4. Check external filesDir
+            File extDir = getExternalFilesDir(null);
+            if (extDir != null) {
+                File extFile = new File(extDir, "busy_bees_expense_tracker_backup.json");
+                res = readFileToString(extFile);
+                if (!res.isEmpty()) return res;
+            }
+
+            // 5. Check shared survival folders (Android/media, Download/BusyBeesBackup, Documents/BusyBeesBackup, Download/*.json)
+            String sharedJson = readSharedSurvivalBackupCopy();
+            if (!sharedJson.isEmpty()) {
+                prefs.edit()
+                    .putString(KEY_DRIVE_LAST_JSON, sharedJson)
+                    .putLong(KEY_DRIVE_LAST_MODIFIED, System.currentTimeMillis())
+                    .apply();
+                return sharedJson;
+            }
+
+            // 6. Check silent MediaStore backup copy
             String mediaStoreJson = readMediaStoreBackupCopy();
             if (!mediaStoreJson.isEmpty()) {
                 prefs.edit()

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { CloudDownload, RefreshCw, AlertTriangle } from 'lucide-react';
 import { AppSettings, LogoVariant, Transaction, UserProfile } from '../../types';
 import { AppBackupSnapshot, storage } from '../../services/storage';
@@ -6,12 +6,14 @@ import { BusyBeesLogo } from '../BusyBeesLogo';
 import {
   CloudBackupFileInfo,
   connectGoogleAccount,
+  deleteCloudBackup,
   downloadCloudBackup,
   findCloudBackup,
   formatBackupTimestamp,
   formatBytes,
+  getAccessToken,
+  hasActiveAccessToken,
   isNativeDriveBridgeAvailable,
-  pickAndDownloadNativeBackup,
 } from '../../services/googleDriveBackup';
 
 interface WelcomeScreenProps {
@@ -42,7 +44,48 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
     fileInfo: CloudBackupFileInfo;
     snapshot: AppBackupSnapshot;
     email: string;
+    token: string;
   } | null>(null);
+  const [confirmSkipWarning, setConfirmSkipWarning] = useState(false);
+  const [isDiscardingBackup, setIsDiscardingBackup] = useState(false);
+
+  // Automatically scan in the background on Welcome Screen mount if no local transactions exist
+  useEffect(() => {
+    let cancelled = false;
+    const autoScanBackground = async () => {
+      if (!isNativeDriveBridgeAvailable() && !hasActiveAccessToken()) {
+        return;
+      }
+      setIsCheckingCloud(true);
+      try {
+        const token = isNativeDriveBridgeAvailable()
+          ? 'native_background_scan'
+          : await getAccessToken(false);
+        const fileInfo = await findCloudBackup(token);
+        if (cancelled || !fileInfo) return;
+        const snapshot = await downloadCloudBackup(token, fileInfo.id);
+        if (cancelled) return;
+        const savedEmail = storage.getBackupMeta().googleEmail || 'Google Drive Backup';
+        setConfirmSkipWarning(false);
+        setFoundBackup({
+          fileInfo,
+          snapshot,
+          email: savedEmail,
+          token,
+        });
+      } catch {
+        // Silent background scan on mount: do not show error if no backup exists yet
+      } finally {
+        if (!cancelled) {
+          setIsCheckingCloud(false);
+        }
+      }
+    };
+    void autoScanBackground();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -68,37 +111,23 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
     setIsCheckingCloud(true);
     try {
       const { user, accessToken } = await connectGoogleAccount(true);
-      let fileInfo = await findCloudBackup(accessToken);
-      let snapshot: AppBackupSnapshot | null = null;
+      const fileInfo = await findCloudBackup(accessToken);
 
       if (!fileInfo) {
-        if (isNativeDriveBridgeAvailable()) {
-          const picked = await pickAndDownloadNativeBackup();
-          fileInfo = picked.fileInfo;
-          snapshot = picked.snapshot;
-        } else {
-          setCloudError(
-            `No Busy Bees backup was found in Google Drive for ${user.email || 'this account'}. You can set up your profile below.`
-          );
-          return;
-        }
-      } else {
-        snapshot = await downloadCloudBackup(accessToken, fileInfo.id);
+        setCloudError(
+          `No Busy Bees backup was found in Google Drive for ${user.email || 'this account'}. You can set up your profile below.`
+        );
+        return;
       }
 
-      const restored = storage.restoreFullBackupSnapshot(snapshot);
-      storage.saveBackupMeta({
-        lastBackupTime: new Date(fileInfo.modifiedTime).getTime(),
-        lastBackupSize: fileInfo.sizeBytes,
-        lastBackupTxCount: restored.transactions.length,
-        googleEmail: user.email || '',
+      const snapshot = await downloadCloudBackup(accessToken, fileInfo.id);
+      setConfirmSkipWarning(false);
+      setFoundBackup({
+        fileInfo,
+        snapshot,
+        email: user.email || storage.getBackupMeta().googleEmail || 'Google Drive',
+        token: accessToken,
       });
-      setFoundBackup(null);
-      if (onRestoredFromCloud) {
-        onRestoredFromCloud(restored);
-      } else {
-        onComplete(restored.profile);
-      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unable to check Google Drive backup.';
       if (!msg.includes('popup-closed-by-user')) {
@@ -119,10 +148,29 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
       googleEmail: foundBackup.email,
     });
     setFoundBackup(null);
+    setConfirmSkipWarning(false);
     if (onRestoredFromCloud) {
       onRestoredFromCloud(restored);
     } else {
       onComplete(restored.profile);
+    }
+  };
+
+  const handleContinueWithoutRestoring = async () => {
+    if (!foundBackup) return;
+    if (!confirmSkipWarning) {
+      setConfirmSkipWarning(true);
+      return;
+    }
+    setIsDiscardingBackup(true);
+    try {
+      await deleteCloudBackup(foundBackup.token, foundBackup.fileInfo.id);
+    } catch {
+      // Ignore deletion errors if offline
+    } finally {
+      setIsDiscardingBackup(false);
+      setFoundBackup(null);
+      setConfirmSkipWarning(false);
     }
   };
 
@@ -154,7 +202,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                   Reinstalling or switching phones?
                 </h2>
                 <p className="text-xs text-slate-600 dark:text-slate-400 mt-0.5 leading-relaxed">
-                  Restore your previous transactions, profile, and settings from your Google Drive backup.
+                  Scan Google Drive in the background to restore your previous transactions, profile, and settings.
                 </p>
               </div>
             </div>
@@ -175,7 +223,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
               {isCheckingCloud ? (
                 <>
                   <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                  <span>Checking Google Drive...</span>
+                  <span>Scanning Google Drive in background...</span>
                 </>
               ) : (
                 <>
@@ -275,23 +323,25 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
         </div>
       </form>
 
-      {/* Restore Confirmation Modal */}
+      {/* Restore or Continue Without Restoring Modal */}
       {foundBackup && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="w-full max-w-xs bg-white dark:bg-slate-800 rounded-2xl p-5 shadow-2xl border border-slate-100 dark:border-slate-700 text-center animate-in fade-in zoom-in-95">
+          <div className="w-full max-w-sm bg-white dark:bg-slate-800 rounded-2xl p-5 shadow-2xl border border-slate-100 dark:border-slate-700 text-center animate-in fade-in zoom-in-95">
             <div className="w-12 h-12 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto mb-3">
               <CloudDownload className="w-6 h-6" />
             </div>
             <h3 className="font-bold text-slate-900 dark:text-slate-100 text-base">
-              Backup Found!
+              Backup Found on Google Drive!
             </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1.5 leading-relaxed">
-              Would you like to restore your Busy Bees data from Google Drive?
+            <p className="text-xs text-slate-600 dark:text-slate-300 mt-1.5 leading-relaxed">
+              A backup of your Busy Bees data was found. Do you want to restore from it or continue without restoring?
             </p>
+
+            {/* Backup Metadata Box */}
             <div className="mt-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-900/70 border border-slate-100 dark:border-slate-700 text-left text-xs space-y-1.5">
               <div className="flex justify-between">
                 <span className="text-slate-500">Account:</span>
-                <span className="font-semibold text-slate-800 dark:text-slate-200 truncate max-w-[140px]">
+                <span className="font-semibold text-slate-800 dark:text-slate-200 truncate max-w-[160px]">
                   {foundBackup.email}
                 </span>
               </div>
@@ -322,20 +372,41 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                 </span>
               </div>
             </div>
-            <div className="mt-5 flex gap-2.5">
+
+            {/* Warning Banner */}
+            <div className="mt-3 p-3 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800/80 text-left flex items-start gap-2.5">
+              <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+              <p className="text-[11px] text-amber-900 dark:text-amber-200 leading-relaxed font-medium">
+                {confirmSkipWarning
+                  ? 'Final Confirmation: Are you sure you want to continue without restoring? This backup will be discarded and will NOT be available to you again.'
+                  : 'Warning: If you continue without restoring, this backup data will not be available to you again.'}
+              </p>
+            </div>
+
+            <div className="mt-4 flex flex-col gap-2">
               <button
                 type="button"
-                onClick={() => setFoundBackup(null)}
-                className="flex-1 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-sm font-medium hover:bg-slate-50 dark:hover:bg-slate-700 transition"
+                disabled={isDiscardingBackup}
+                onClick={handleConfirmCloudRestore}
+                className="w-full py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold transition shadow-xs disabled:opacity-50"
               >
-                Cancel
+                Restore from Backup
               </button>
               <button
                 type="button"
-                onClick={handleConfirmCloudRestore}
-                className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold transition"
+                disabled={isDiscardingBackup}
+                onClick={handleContinueWithoutRestoring}
+                className={`w-full py-2.5 rounded-xl border text-xs font-semibold transition disabled:opacity-50 ${
+                  confirmSkipWarning
+                    ? 'bg-rose-600 hover:bg-rose-700 border-rose-600 text-white'
+                    : 'border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700'
+                }`}
               >
-                Restore
+                {isDiscardingBackup
+                  ? 'Discarding backup...'
+                  : confirmSkipWarning
+                  ? 'Yes, Continue Without Restoring (Lose Backup)'
+                  : 'Continue Without Restoring'}
               </button>
             </div>
           </div>

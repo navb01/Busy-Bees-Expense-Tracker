@@ -23,6 +23,7 @@ interface NativeDriveBridge {
   ) => void;
   getCachedBackupMetadataJson?: () => string;
   getCachedBackupContent?: () => string;
+  scanCloudBackupInBackground?: () => void;
   openGoogleDriveRestorePicker?: () => void;
   deleteCachedBackup?: () => void;
 }
@@ -526,6 +527,21 @@ async function driveFetch(url: string, token: string, init?: RequestInit): Promi
 export async function findCloudBackup(token: string): Promise<CloudBackupFileInfo | null> {
   const nativeBridge = getNativeDriveBridge();
   if (nativeBridge) {
+    if (typeof nativeBridge.scanCloudBackupInBackground === 'function') {
+      await new Promise<void>((resolve) => {
+        const timeoutId = window.setTimeout(() => {
+          window.removeEventListener('bb-native-drive-scan-result', handler);
+          resolve();
+        }, 12000);
+        const handler = () => {
+          window.clearTimeout(timeoutId);
+          window.removeEventListener('bb-native-drive-scan-result', handler);
+          resolve();
+        };
+        window.addEventListener('bb-native-drive-scan-result', handler);
+        nativeBridge.scanCloudBackupInBackground!();
+      });
+    }
     const rawMeta = nativeBridge.getCachedBackupMetadataJson?.() || '';
     const rawContent = nativeBridge.getCachedBackupContent?.() || '';
     if (rawMeta && rawContent) {
@@ -536,7 +552,7 @@ export async function findCloudBackup(token: string): Promise<CloudBackupFileInf
           return {
             id: 'native_cached_backup',
             name: BACKUP_FILE_NAME,
-            modifiedTime: new Date(meta.modifiedTime || Date.now()).toISOString(),
+            modifiedTime: new Date(meta.modifiedTime || parsedSnap.createdAt || Date.now()).toISOString(),
             sizeBytes: Number(meta.sizeBytes || rawContent.length),
             txCount: parsedSnap.transactions.length,
             profileName: parsedSnap.profile?.name || undefined,
@@ -811,15 +827,18 @@ export async function downloadCloudBackup(
 ): Promise<AppBackupSnapshot> {
   const nativeBridge = getNativeDriveBridge();
   if (nativeBridge) {
-    const rawContent = nativeBridge.getCachedBackupContent?.() || '';
+    let rawContent = nativeBridge.getCachedBackupContent?.() || '';
+    if (!rawContent) {
+      await findCloudBackup(token);
+      rawContent = nativeBridge.getCachedBackupContent?.() || '';
+    }
     if (rawContent) {
       const parsed = JSON.parse(rawContent) as AppBackupSnapshot;
       if (parsed && Array.isArray(parsed.transactions)) {
         return parsed;
       }
     }
-    const picked = await pickAndDownloadNativeBackup();
-    return picked.snapshot;
+    throw new Error('No Busy Bees backup file was found in Google Drive.');
   }
 
   const url = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;

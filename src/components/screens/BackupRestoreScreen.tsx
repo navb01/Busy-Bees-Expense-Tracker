@@ -33,8 +33,6 @@ import {
   formatBytes,
   getAccessToken,
   hasActiveAccessToken,
-  isNativeDriveBridgeAvailable,
-  pickAndDownloadNativeBackup,
   subscribeAuthUser,
   uploadCloudBackup,
 } from '../../services/googleDriveBackup';
@@ -78,10 +76,16 @@ export const BackupRestoreScreen: React.FC<BackupRestoreScreenProps> = ({
     message: string;
   } | null>(null);
 
-  //Modals
+  // Modals
   const [frequencyModalOpen, setFrequencyModalOpen] = useState(false);
   const [confirmDeleteModalOpen, setConfirmDeleteModalOpen] = useState(false);
   const [verifyModalOpen, setVerifyModalOpen] = useState(false);
+  const [olderBackupWarning, setOlderBackupWarning] = useState<{
+    fileInfo: CloudBackupFileInfo;
+    snapshot: AppBackupSnapshot;
+    backupTimeMs: number;
+    latestLocalTimeMs: number;
+  } | null>(null);
 
   useEffect(() => {
     const unsub = subscribeAuthUser((user) => {
@@ -254,11 +258,33 @@ export const BackupRestoreScreen: React.FC<BackupRestoreScreenProps> = ({
     }
   };
 
-  // Automatic Background Restore: Fetches and restores latest backup in the background with zero manual intervention
+  const applyBackupRestore = (
+    resolvedFileInfo: CloudBackupFileInfo,
+    resolvedSnapshot: AppBackupSnapshot
+  ) => {
+    setCloudBackup(resolvedFileInfo);
+    const restored = storage.restoreFullBackupSnapshot(resolvedSnapshot);
+    const updatedMeta = storage.saveBackupMeta({
+      lastBackupTime: new Date(resolvedFileInfo.modifiedTime).getTime(),
+      lastBackupSize: resolvedFileInfo.sizeBytes,
+      lastBackupTxCount: restored.transactions.length,
+    });
+    setBackupMeta(updatedMeta);
+    setOlderBackupWarning(null);
+
+    onRestored(restored);
+    setStatusBanner({
+      type: 'success',
+      message: `Restored ${restored.transactions.length} transaction(s), profile, and settings automatically in the background.`,
+    });
+    onShowToast('Data restored in background');
+  };
+
+  // Automatic Background Restore: Fetches backup in the background and warns if backup is older than current local storage
   const handleInitiateRestore = async () => {
     setStatusBanner(null);
     setIsBusy(true);
-    setBusyAction('Restoring backup in the background...');
+    setBusyAction('Scanning Google Drive in the background...');
 
     try {
       let token = await getAccessToken(false);
@@ -274,40 +300,54 @@ export const BackupRestoreScreen: React.FC<BackupRestoreScreenProps> = ({
         }
       }
 
-      let resolvedFileInfo: CloudBackupFileInfo | null = found;
-      let resolvedSnapshot: AppBackupSnapshot | null = null;
-
-      if (!resolvedFileInfo) {
-        if (isNativeDriveBridgeAvailable()) {
-          const picked = await pickAndDownloadNativeBackup();
-          resolvedFileInfo = picked.fileInfo;
-          resolvedSnapshot = picked.snapshot;
-        } else {
-          setStatusBanner({
-            type: 'error',
-            message: 'No backup file was found on Google Drive for this Google account.',
-          });
-          return;
-        }
-      } else {
-        resolvedSnapshot = await downloadCloudBackup(token, resolvedFileInfo.id);
+      if (!found) {
+        setStatusBanner({
+          type: 'error',
+          message: 'No backup file was found on Google Drive for this Google account.',
+        });
+        return;
       }
 
-      setCloudBackup(resolvedFileInfo);
-      const restored = storage.restoreFullBackupSnapshot(resolvedSnapshot);
-      const updatedMeta = storage.saveBackupMeta({
-        lastBackupTime: new Date(resolvedFileInfo.modifiedTime).getTime(),
-        lastBackupSize: resolvedFileInfo.sizeBytes,
-        lastBackupTxCount: restored.transactions.length,
-      });
-      setBackupMeta(updatedMeta);
+      const resolvedSnapshot = await downloadCloudBackup(token, found.id);
+      setCloudBackup(found);
 
-      onRestored(restored);
-      setStatusBanner({
-        type: 'success',
-        message: `Restored ${restored.transactions.length} transaction(s), profile, and settings automatically in the background.`,
-      });
-      onShowToast('Data restored in background');
+      // Compare backup age vs current local storage data
+      const fileModifiedMs = new Date(found.modifiedTime).getTime() || 0;
+      const snapshotCreatedMs = Number(resolvedSnapshot.createdAt || 0);
+      const latestBackupTxMs = (resolvedSnapshot.transactions || []).reduce(
+        (max, t) => Math.max(max, Number(t.updatedAt || 0), Number(t.createdAt || 0)),
+        0
+      );
+      const backupTimeMs = Math.max(snapshotCreatedMs, fileModifiedMs, latestBackupTxMs);
+
+      const latestLocalTxMs = transactions.reduce(
+        (max, t) => Math.max(max, Number(t.updatedAt || 0), Number(t.createdAt || 0)),
+        0
+      );
+      const backupIds = new Set((resolvedSnapshot.transactions || []).map((t) => t.id));
+      const hasNewerOrUnbackedLocalTx = transactions.some(
+        (lt) =>
+          !backupIds.has(lt.id) ||
+          Number(lt.updatedAt || lt.createdAt || 0) > backupTimeMs + 1000
+      );
+
+      const isBackupOlderThanLocal =
+        transactions.length > 0 &&
+        (latestLocalTxMs > backupTimeMs + 1000 ||
+          hasNewerOrUnbackedLocalTx ||
+          transactions.length > (resolvedSnapshot.transactions || []).length);
+
+      if (isBackupOlderThanLocal) {
+        setOlderBackupWarning({
+          fileInfo: found,
+          snapshot: resolvedSnapshot,
+          backupTimeMs: backupTimeMs || fileModifiedMs || Date.now(),
+          latestLocalTimeMs: Math.max(latestLocalTxMs, Date.now()),
+        });
+        return;
+      }
+
+      applyBackupRestore(found, resolvedSnapshot);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Failed to restore backup from Google Drive.';
       if (!msg.includes('popup-closed-by-user')) {
@@ -754,6 +794,93 @@ export const BackupRestoreScreen: React.FC<BackupRestoreScreenProps> = ({
           </div>
         </div>
       )}
+
+      {/* Modal 6: Warning When Backup Data is Older Than Current Local Storage */}
+      {olderBackupWarning && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="w-full max-w-sm bg-white dark:bg-slate-800 rounded-2xl p-5 shadow-2xl border border-slate-100 dark:border-slate-700 text-center animate-in fade-in zoom-in-95">
+            <div className="w-12 h-12 rounded-full bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 flex items-center justify-center mx-auto mb-3">
+              <AlertTriangle className="w-6 h-6" />
+            </div>
+
+            <h3 className="font-bold text-slate-900 dark:text-slate-100 text-base">
+              Backup Data is Older!
+            </h3>
+
+            <p className="text-xs text-slate-600 dark:text-slate-300 mt-1.5 leading-relaxed">
+              The backup on Google Drive is older than the data currently stored on this phone. Restoring will replace your newer local data with older backup data.
+            </p>
+
+            <div className="mt-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-900/70 border border-slate-100 dark:border-slate-700 text-left text-xs space-y-2">
+              <div className="pb-2 border-b border-slate-200/70 dark:border-slate-800 space-y-1">
+                <span className="block text-[11px] font-bold uppercase tracking-wider text-[#2357A4] dark:text-blue-400">
+                  Current Phone Data (Newer)
+                </span>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Latest Activity:</span>
+                  <span className="font-semibold text-slate-800 dark:text-slate-200">
+                    {formatBackupTimestamp(olderBackupWarning.latestLocalTimeMs)}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Transactions:</span>
+                  <span className="font-semibold text-slate-800 dark:text-slate-200">
+                    {transactions.length} entries
+                  </span>
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <span className="block text-[11px] font-bold uppercase tracking-wider text-amber-600 dark:text-amber-400">
+                  Google Drive Backup (Older)
+                </span>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Backup Date:</span>
+                  <span className="font-semibold text-slate-800 dark:text-slate-200">
+                    {formatBackupTimestamp(olderBackupWarning.backupTimeMs)}
+                  </span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Transactions:</span>
+                  <span className="font-semibold text-slate-800 dark:text-slate-200">
+                    {olderBackupWarning.snapshot.transactions.length} entries
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-3 p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800/80 text-left flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+              <span className="text-[11px] text-amber-900 dark:text-amber-200 leading-relaxed font-medium">
+                Warning: Any newer transactions or changes made after this backup will be overwritten and lost.
+              </span>
+            </div>
+
+            <div className="mt-4 flex flex-col gap-2">
+              <button
+                type="button"
+                onClick={() => setOlderBackupWarning(null)}
+                className="w-full py-2.5 rounded-xl bg-[#2357A4] hover:bg-[#1D4A8C] text-white text-xs font-semibold transition"
+              >
+                Cancel (Keep Current Data)
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  applyBackupRestore(
+                    olderBackupWarning.fileInfo,
+                    olderBackupWarning.snapshot
+                  )
+                }
+                className="w-full py-2.5 rounded-xl border border-rose-200 dark:border-rose-800/80 bg-rose-50 dark:bg-rose-950/40 hover:bg-rose-100 dark:hover:bg-rose-900/50 text-rose-700 dark:text-rose-300 text-xs font-semibold transition"
+              >
+                Replace with Older Backup
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
+
