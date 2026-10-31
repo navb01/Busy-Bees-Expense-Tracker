@@ -19,7 +19,7 @@ const STORAGE_KEYS = {
   PENDING_SMS_QUEUE: 'bb_pending_sms_queue_v1',
 };
 
-const CURRENT_STORAGE_VERSION = 6;
+const CURRENT_STORAGE_VERSION = 7;
 
 export const DEFAULT_PROFILE: UserProfile = {
   name: '',
@@ -40,6 +40,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   lastActiveTimestamp: Date.now(),
   notificationsEnabled: false,
   smsAutoDetectEnabled: true,
+  smsPullDownNotificationEnabled: false,
+  logoVariant: 'swoosh',
 };
 
 export const DEFAULT_BACKUP_META: LocalBackupMetadata = {
@@ -72,8 +74,8 @@ class StorageService {
     if (this.initialized) return;
     try {
       const storedVersion = localStorage.getItem(STORAGE_KEYS.VERSION);
-      if (!storedVersion || Number(storedVersion) < 5) {
-        // Initialize / reset to a clean, empty state with zero dummy or test values
+      if (!storedVersion || Number(storedVersion) < CURRENT_STORAGE_VERSION) {
+        // Initialize / reset to a 100% clean, empty state with zero dummy or test values
         localStorage.setItem(STORAGE_KEYS.VERSION, String(CURRENT_STORAGE_VERSION));
         localStorage.setItem(STORAGE_KEYS.TRANSACTIONS, JSON.stringify([]));
         localStorage.setItem(STORAGE_KEYS.PROFILE, JSON.stringify(DEFAULT_PROFILE));
@@ -84,18 +86,21 @@ class StorageService {
         localStorage.setItem(STORAGE_KEYS.LAST_ACTIVE, String(Date.now()));
         localStorage.setItem(STORAGE_KEYS.INSTALLED_AT, getTodayISO());
         localStorage.setItem(STORAGE_KEYS.ONBOARDED, 'false');
-      } else if (Number(storedVersion) < CURRENT_STORAGE_VERSION) {
-        // Upgrade v5 -> v6: set Dark mode as default while preserving existing user data
-        localStorage.setItem(STORAGE_KEYS.VERSION, String(CURRENT_STORAGE_VERSION));
+
+        // Also drain any leftover native SMS queue from previous test runs
         try {
-          const rawSettings = localStorage.getItem(STORAGE_KEYS.SETTINGS);
-          const parsedSettings = rawSettings ? JSON.parse(rawSettings) : {};
-          localStorage.setItem(
-            STORAGE_KEYS.SETTINGS,
-            JSON.stringify({ ...DEFAULT_SETTINGS, ...parsedSettings, appearance: 'Dark' })
-          );
+          const win = window as unknown as {
+            BusyBeesNative?: {
+              consumePendingSmsTransactions?: () => string;
+              consumeAutoSavedSmsTransactions?: () => string;
+              consumePendingNotificationAction?: () => string;
+            };
+          };
+          win.BusyBeesNative?.consumePendingSmsTransactions?.();
+          win.BusyBeesNative?.consumeAutoSavedSmsTransactions?.();
+          win.BusyBeesNative?.consumePendingNotificationAction?.();
         } catch {
-          localStorage.setItem(STORAGE_KEYS.SETTINGS, JSON.stringify(DEFAULT_SETTINGS));
+          // ignore
         }
       }
       this.initialized = true;
@@ -180,11 +185,30 @@ class StorageService {
     }
   }
 
-  addTransaction(tx: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>): Transaction {
+  hasTransactionWithId(id: string): boolean {
+    if (!id) return false;
+    return this.getTransactions().some((t) => t.id === id);
+  }
+
+  addTransaction(
+    tx: Omit<Transaction, 'id' | 'createdAt' | 'updatedAt'>,
+    customId?: string
+  ): Transaction {
     const list = this.getTransactions();
+    const resolvedId =
+      customId && customId.trim().length > 0
+        ? customId.trim()
+        : 'tx_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
+
+    // Prevent recording the same SMS-detected transaction twice (e.g. if Save is clicked on both bubble and notification)
+    const existing = list.find((t) => t.id === resolvedId);
+    if (existing) {
+      return existing;
+    }
+
     const newTx: Transaction = {
       ...tx,
-      id: 'tx_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7),
+      id: resolvedId,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };

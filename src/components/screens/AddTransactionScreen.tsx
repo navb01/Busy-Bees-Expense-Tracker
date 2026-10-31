@@ -186,7 +186,7 @@ export const AddTransactionScreen: React.FC<AddTransactionScreenProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col justify-between px-6 pt-6 pb-12 sm:pb-6 max-w-lg mx-auto w-full overflow-y-auto">
+    <div className="flex-1 flex flex-col justify-between px-6 pt-6 pb-20 sm:pb-8 max-w-lg mx-auto w-full">
       <div className="space-y-6">
         {/* Amount section */}
         <div className="text-center pt-2 pb-4">
@@ -344,7 +344,7 @@ export const AddTransactionScreen: React.FC<AddTransactionScreenProps> = ({
       </div>
 
       {/* Save Button */}
-      <div className="pt-6 mt-6">
+      <div className="pt-6 mt-6 pb-6 sm:pb-0">
         <button
           type="button"
           onClick={handleSave}

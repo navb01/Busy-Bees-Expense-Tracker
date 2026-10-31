@@ -10,8 +10,12 @@ interface NativeSmsBridge {
   openSmsNotificationAccessSettings?: () => void;
   openNotificationListenerSettingsDirect?: () => void;
   consumePendingSmsTransactions?: () => string;
+  consumeAutoSavedSmsTransactions?: () => string;
+  resolveSmsTransactionInNative?: (itemId: string) => void;
   consumePendingNotificationAction?: () => string;
   setSmsAutoDetectEnabled?: (enabled: boolean) => void;
+  isSmsPullDownNotificationEnabled?: () => boolean;
+  setSmsPullDownNotificationEnabled?: (enabled: boolean) => void;
 }
 
 const getNativeBridge = (): NativeSmsBridge | null => {
@@ -281,6 +285,29 @@ export function syncNativeSmsAutoDetectEnabled(enabled: boolean): void {
   }
 }
 
+export function syncNativeSmsPullDownNotifEnabled(enabled: boolean): void {
+  try {
+    const bridge = getNativeBridge();
+    if (bridge && typeof bridge.setSmsPullDownNotificationEnabled === 'function') {
+      bridge.setSmsPullDownNotificationEnabled(enabled);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+export function isNativeSmsPullDownNotifEnabled(): boolean {
+  try {
+    const bridge = getNativeBridge();
+    if (bridge && typeof bridge.isSmsPullDownNotificationEnabled === 'function') {
+      return Boolean(bridge.isSmsPullDownNotificationEnabled());
+    }
+  } catch {
+    // ignore
+  }
+  return false;
+}
+
 /**
  * Drains any sanitized transactions queued by the native Android SMS receiver/service
  * while the app was in the background or closed.
@@ -315,14 +342,70 @@ export function consumeNativePendingSmsTransactions(): DetectedSmsTransaction[] 
 }
 
 /**
+ * Drains any SMS transactions that the user saved in the background via the pull-down
+ * notification's "Save" button (without opening the app).
+ */
+export function consumeNativeAutoSavedSmsTransactions(): {
+  id: string;
+  type: TransactionType;
+  amount: number;
+  category?: string;
+}[] {
+  try {
+    const bridge = getNativeBridge();
+    if (!bridge || typeof bridge.consumeAutoSavedSmsTransactions !== 'function') {
+      return [];
+    }
+    const jsonStr = bridge.consumeAutoSavedSmsTransactions();
+    if (!jsonStr) return [];
+    const parsed = JSON.parse(jsonStr);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (item) =>
+          item &&
+          item.id &&
+          (item.type === 'income' || item.type === 'expense') &&
+          typeof item.amount === 'number' &&
+          item.amount > 0
+      )
+      .map((item) => ({
+        id: String(item.id),
+        type: item.type as TransactionType,
+        amount: Math.round(Number(item.amount) * 100) / 100,
+        category: typeof item.category === 'string' && item.category.trim() ? item.category.trim() : undefined,
+      }));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Marks an SMS itemId as processed in the native Android layer and cancels its
+ * status-bar pull-down notification so it cannot be saved a second time.
+ */
+export function resolveNativeSmsTransaction(itemId: string): void {
+  if (!itemId) return;
+  try {
+    const bridge = getNativeBridge();
+    if (bridge && typeof bridge.resolveSmsTransactionInNative === 'function') {
+      bridge.resolveSmsTransactionInNative(itemId);
+    }
+  } catch {
+    // ignore
+  }
+}
+
+/**
  * Drains any direct notification button action ("save" or "edit") tapped on the Android
- * Truecaller-style large drawer notification.
+ * Truecaller-style large drawer notification or floating bubble.
  */
 export function consumeNativeNotificationAction(): {
   action: 'save' | 'edit';
   id: string;
   type: TransactionType;
   amount: number;
+  category?: string;
 } | null {
   try {
     const bridge = getNativeBridge();
@@ -344,6 +427,7 @@ export function consumeNativeNotificationAction(): {
         id: String(parsed.id || ''),
         type: parsed.type,
         amount: Math.round(Number(parsed.amount) * 100) / 100,
+        category: typeof parsed.category === 'string' && parsed.category.trim() ? parsed.category.trim() : undefined,
       };
     }
   } catch {

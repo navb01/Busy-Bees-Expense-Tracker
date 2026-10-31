@@ -9,6 +9,7 @@ import android.content.Intent;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.os.Build;
+import android.view.View;
 import android.widget.RemoteViews;
 import androidx.core.app.NotificationCompat;
 import java.text.DecimalFormat;
@@ -30,17 +31,47 @@ public final class SmsTransactionProcessor {
 
     public static final String PREFS_NAME = "bb_sms_queue_prefs";
     public static final String KEY_PENDING_QUEUE = "pending_sms_json";
+    public static final String KEY_AUTO_SAVED_QUEUE = "auto_saved_sms_json";
+    public static final String KEY_PROCESSED_IDS = "processed_sms_ids_json";
     public static final String KEY_AUTO_DETECT_ENABLED = "sms_auto_detect_enabled";
+    public static final String KEY_PULLDOWN_NOTIF_ENABLED = "sms_pulldown_notif_enabled";
     public static final String KEY_LAST_SIGNATURE = "last_sms_signature";
     public static final String KEY_LAST_DETECTED_MS = "last_sms_detected_ms";
 
     public static final String ACTION_SMS_DETECTED = "com.busybees.expensetracker.SMS_TRANSACTION_DETECTED";
     public static final String ACTION_NOTIFICATION_BUTTON = "com.busybees.expensetracker.SMS_NOTIFICATION_ACTION";
 
-    public static final String EXTRA_ACTION_TYPE = "extra_action_type"; // "save", "edit", "ignore"
+    public static final String EXTRA_ACTION_TYPE = "extra_action_type"; // "save", "edit", "ignore", "toggle_category_dropdown", "select_category"
     public static final String EXTRA_ITEM_ID = "extra_item_id";
     public static final String EXTRA_TX_TYPE = "extra_tx_type";
     public static final String EXTRA_TX_AMOUNT = "extra_tx_amount";
+    public static final String EXTRA_TX_CATEGORY = "extra_tx_category";
+    public static final String EXTRA_DROPDOWN_EXPANDED = "extra_dropdown_expanded";
+
+    public static final String[] EXPENSE_CATEGORIES = new String[]{
+        "Food & groceries",
+        "Shopping",
+        "Transport",
+        "Bills & utilities",
+        "Entertainment",
+        "Health & medical",
+        "Education",
+        "Housing & rent",
+        "Personal care",
+        "Travel",
+        "Other"
+    };
+
+    public static final String[] INCOME_CATEGORIES = new String[]{
+        "Salary",
+        "Rentals",
+        "Freelance",
+        "Investments",
+        "Gift",
+        "Refund",
+        "Business",
+        "Other"
+    };
 
     private static final String CHANNEL_ID = "bb_truecaller_sms_drawer_v3";
 
@@ -278,7 +309,10 @@ public final class SmsTransactionProcessor {
 
             enqueueDetectedItem(prefs, itemId, parsed.type, parsed.amount, now);
 
-            // Broadcast to MainActivity if app is currently in foreground
+            // 1. Show Floating Bubble Overlay Notification (maximised by default with green/red & category dropdown)
+            SmsFloatingBubbleService.showDetectedTransaction(context, itemId, parsed.type, parsed.amount);
+
+            // 2. Broadcast to MainActivity if app is currently in foreground
             Intent broadcast = new Intent(ACTION_SMS_DETECTED);
             broadcast.setPackage(context.getPackageName());
             broadcast.putExtra("id", itemId);
@@ -287,11 +321,11 @@ public final class SmsTransactionProcessor {
             broadcast.putExtra("detectedAt", now);
             context.sendBroadcast(broadcast);
 
-            // Launch FB Messenger-Style Floating Bubble Overlay (if overlay permission is granted)
-            SmsFloatingBubbleService.showBubble(context.getApplicationContext(), itemId, parsed.type, parsed.amount);
-
-            // Show Truecaller-Style Large Drawer Notification
-            showTruecallerStyleDrawerNotification(context, itemId, parsed.type, parsed.amount);
+            // 3. Only show Pull-Down Notification (Truecaller-style) if explicitly enabled in Settings (disabled by default)
+            boolean pullDownEnabled = prefs.getBoolean(KEY_PULLDOWN_NOTIF_ENABLED, false);
+            if (pullDownEnabled) {
+                showTruecallerStyleDrawerNotification(context, itemId, parsed.type, parsed.amount);
+            }
         } catch (Exception ignored) {
         }
     }
@@ -319,7 +353,98 @@ public final class SmsTransactionProcessor {
         }
     }
 
-    public static void removeDetectedItemFromQueue(Context context, String itemId) {
+    public static synchronized boolean markItemProcessedOnce(Context context, String itemId) {
+        if (context == null || itemId == null || itemId.isEmpty()) return false;
+        try {
+            SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+            String raw = prefs.getString(KEY_PROCESSED_IDS, "[]");
+            JSONArray arr = new JSONArray(raw);
+            for (int i = 0; i < arr.length(); i++) {
+                if (itemId.equals(arr.optString(i))) {
+                    return false; // Already processed via bubble or notification
+                }
+            }
+            JSONArray next = new JSONArray();
+            int start = Math.max(0, arr.length() - 150);
+            for (int i = start; i < arr.length(); i++) {
+                next.put(arr.optString(i));
+            }
+            next.put(itemId);
+            prefs.edit().putString(KEY_PROCESSED_IDS, next.toString()).apply();
+            return true;
+        } catch (Exception ignored) {
+            return true;
+        }
+    }
+
+    public static synchronized void enqueueAutoSavedItem(
+        Context context,
+        String itemId,
+        String type,
+        double amount
+    ) {
+        enqueueAutoSavedItem(
+            context,
+            itemId,
+            type,
+            amount,
+            "income".equals(type) ? "Salary" : "Shopping"
+        );
+    }
+
+    public static synchronized void enqueueAutoSavedItem(
+        Context context,
+        String itemId,
+        String type,
+        double amount,
+        String category
+    ) {
+        if (context == null || itemId == null) return;
+        try {
+            SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+            String existingJson = prefs.getString(KEY_AUTO_SAVED_QUEUE, "[]");
+            JSONArray arr = new JSONArray(existingJson);
+
+            for (int i = 0; i < arr.length(); i++) {
+                JSONObject existing = arr.optJSONObject(i);
+                if (existing != null && itemId.equals(existing.optString("id"))) {
+                    return;
+                }
+            }
+
+            String safeType = "income".equals(type) ? "income" : "expense";
+            String safeCategory = (category != null && !category.trim().isEmpty())
+                ? category.trim()
+                : ("income".equals(safeType) ? "Salary" : "Shopping");
+
+            JSONObject obj = new JSONObject();
+            obj.put("id", itemId);
+            obj.put("type", safeType);
+            obj.put("amount", amount);
+            obj.put("category", safeCategory);
+            obj.put("savedAt", System.currentTimeMillis());
+
+            arr.put(obj);
+            prefs.edit().putString(KEY_AUTO_SAVED_QUEUE, arr.toString()).apply();
+        } catch (Exception ignored) {
+        }
+    }
+
+    public static synchronized void resolveAndCancelNotification(Context context, String itemId) {
+        if (context == null || itemId == null || itemId.isEmpty()) return;
+        try {
+            markItemProcessedOnce(context, itemId);
+            removeDetectedItemFromQueue(context, itemId);
+            NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
+            if (nm != null) {
+                nm.cancel(Math.abs(itemId.hashCode()));
+            }
+            SmsFloatingBubbleService.dismissIfMatching(context, itemId);
+        } catch (Exception ignored) {
+        }
+    }
+
+    public static synchronized void removeDetectedItemFromQueue(Context context, String itemId) {
         if (context == null || itemId == null) return;
         try {
             SharedPreferences prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
@@ -337,11 +462,32 @@ public final class SmsTransactionProcessor {
         }
     }
 
-    private static void showTruecallerStyleDrawerNotification(
+    public static void showTruecallerStyleDrawerNotification(
         Context context,
         String itemId,
         String type,
         double amount
+    ) {
+        String defaultCategory = "income".equals(type) ? "Salary" : "Shopping";
+        showTruecallerStyleDrawerNotification(
+            context,
+            itemId,
+            type,
+            amount,
+            defaultCategory,
+            false,
+            false
+        );
+    }
+
+    public static void showTruecallerStyleDrawerNotification(
+        Context context,
+        String itemId,
+        String type,
+        double amount,
+        String selectedCategory,
+        boolean dropdownExpanded,
+        boolean silentUpdate
     ) {
         try {
             NotificationManager nm = (NotificationManager) context.getSystemService(Context.NOTIFICATION_SERVICE);
@@ -361,7 +507,11 @@ public final class SmsTransactionProcessor {
 
             int notifId = Math.abs(itemId.hashCode());
             boolean isIncome = "income".equals(type);
-            int headerColor = isIncome ? Color.parseColor("#059669") : Color.parseColor("#2357A4");
+            int headerColor = isIncome ? Color.parseColor("#16A34A") : Color.parseColor("#DC2626");
+
+            String safeCategory = (selectedCategory != null && !selectedCategory.trim().isEmpty())
+                ? selectedCategory.trim()
+                : (isIncome ? "Salary" : "Shopping");
 
             DecimalFormat df = new DecimalFormat("#,##0.00");
             String formattedAmount = "₹" + df.format(amount);
@@ -373,29 +523,31 @@ public final class SmsTransactionProcessor {
                 piFlags |= PendingIntent.FLAG_IMMUTABLE;
             }
 
-            // Main tap intent -> opens Busy Bees drawer
-            Intent openIntent = new Intent(context, MainActivity.class);
-            openIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
-            openIntent.putExtra(EXTRA_ITEM_ID, itemId);
-            PendingIntent contentPendingIntent = PendingIntent.getActivity(context, notifId, openIntent, piFlags);
+            // Content tap intent -> no-op broadcast so the app ONLY opens when the user explicitly clicks Edit
+            Intent noopTapIntent = new Intent(context, SmsNotificationActionReceiver.class);
+            noopTapIntent.setAction(ACTION_NOTIFICATION_BUTTON);
+            noopTapIntent.putExtra(EXTRA_ACTION_TYPE, "noop");
+            PendingIntent contentPendingIntent = PendingIntent.getBroadcast(context, notifId, noopTapIntent, piFlags);
 
-            // 1. SAVE Button Intent (L -> R #1)
-            Intent saveIntent = new Intent(context, MainActivity.class);
-            saveIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
+            // 1. SAVE Button Intent (L -> R #1 - handled in background WITHOUT opening the app, using safeCategory!)
+            Intent saveIntent = new Intent(context, SmsNotificationActionReceiver.class);
+            saveIntent.setAction(ACTION_NOTIFICATION_BUTTON);
             saveIntent.putExtra(EXTRA_ACTION_TYPE, "save");
             saveIntent.putExtra(EXTRA_ITEM_ID, itemId);
             saveIntent.putExtra(EXTRA_TX_TYPE, type);
             saveIntent.putExtra(EXTRA_TX_AMOUNT, amount);
+            saveIntent.putExtra(EXTRA_TX_CATEGORY, safeCategory);
             saveIntent.putExtra("notif_id", notifId);
-            PendingIntent savePendingIntent = PendingIntent.getActivity(context, notifId + 1, saveIntent, piFlags);
+            PendingIntent savePendingIntent = PendingIntent.getBroadcast(context, notifId + 1, saveIntent, piFlags);
 
-            // 2. EDIT Button Intent (L -> R #2)
+            // 2. EDIT Button Intent (L -> R #2 - ONLY button that opens the app to the Edit screen, with safeCategory!)
             Intent editIntent = new Intent(context, MainActivity.class);
             editIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP | Intent.FLAG_ACTIVITY_CLEAR_TOP);
             editIntent.putExtra(EXTRA_ACTION_TYPE, "edit");
             editIntent.putExtra(EXTRA_ITEM_ID, itemId);
             editIntent.putExtra(EXTRA_TX_TYPE, type);
             editIntent.putExtra(EXTRA_TX_AMOUNT, amount);
+            editIntent.putExtra(EXTRA_TX_CATEGORY, safeCategory);
             editIntent.putExtra("notif_id", notifId);
             PendingIntent editPendingIntent = PendingIntent.getActivity(context, notifId + 2, editIntent, piFlags);
 
@@ -407,25 +559,97 @@ public final class SmsTransactionProcessor {
             ignoreIntent.putExtra("notif_id", notifId);
             PendingIntent ignorePendingIntent = PendingIntent.getBroadcast(context, notifId + 3, ignoreIntent, piFlags);
 
+            // 4. CATEGORY DROPDOWN TOGGLE Intent (opens/closes the category dropdown list inside the notification)
+            Intent toggleCatIntent = new Intent(context, SmsNotificationActionReceiver.class);
+            toggleCatIntent.setAction(ACTION_NOTIFICATION_BUTTON);
+            toggleCatIntent.putExtra(EXTRA_ACTION_TYPE, "toggle_category_dropdown");
+            toggleCatIntent.putExtra(EXTRA_ITEM_ID, itemId);
+            toggleCatIntent.putExtra(EXTRA_TX_TYPE, type);
+            toggleCatIntent.putExtra(EXTRA_TX_AMOUNT, amount);
+            toggleCatIntent.putExtra(EXTRA_TX_CATEGORY, safeCategory);
+            toggleCatIntent.putExtra(EXTRA_DROPDOWN_EXPANDED, !dropdownExpanded);
+            toggleCatIntent.putExtra("notif_id", notifId);
+            PendingIntent toggleCatPendingIntent = PendingIntent.getBroadcast(context, notifId + 4, toggleCatIntent, piFlags);
+
             // Build Truecaller-Style Collapsed & Large Expanded Drawer RemoteViews
             RemoteViews collapsedView = new RemoteViews(context.getPackageName(), R.layout.notification_sms_collapsed);
             collapsedView.setInt(R.id.notif_collapsed_root, "setBackgroundColor", headerColor);
             collapsedView.setTextViewText(R.id.notif_collapsed_badge, "TRANSACTION DETECTED");
-            collapsedView.setTextViewText(R.id.notif_collapsed_title, shortLabel + " • " + formattedAmount);
+            collapsedView.setTextViewText(R.id.notif_collapsed_title, shortLabel + " • " + formattedAmount + " (" + safeCategory + ")");
 
             RemoteViews drawerView = new RemoteViews(context.getPackageName(), R.layout.notification_sms_drawer);
             drawerView.setInt(R.id.notif_drawer_header, "setBackgroundColor", headerColor);
             drawerView.setTextViewText(R.id.notif_drawer_title, "TRANSACTION DETECTED");
             drawerView.setTextViewText(R.id.notif_drawer_type_pill, typeLabel);
             drawerView.setTextViewText(R.id.notif_drawer_amount, formattedAmount);
-            drawerView.setInt(R.id.notif_btn_save, "setBackgroundColor", headerColor);
+            drawerView.setTextViewText(R.id.notif_category_value, safeCategory);
+            drawerView.setTextViewText(R.id.notif_category_chevron, dropdownExpanded ? "▲" : "▼");
+            drawerView.setOnClickPendingIntent(R.id.notif_category_selector_row, toggleCatPendingIntent);
 
+            // Populate Category Dropdown Options inside the pull-down notification
+            drawerView.setViewVisibility(
+                R.id.notif_category_dropdown_list,
+                dropdownExpanded ? View.VISIBLE : View.GONE
+            );
+
+            int[] optIds = new int[]{
+                R.id.notif_cat_opt_0,
+                R.id.notif_cat_opt_1,
+                R.id.notif_cat_opt_2,
+                R.id.notif_cat_opt_3,
+                R.id.notif_cat_opt_4,
+                R.id.notif_cat_opt_5,
+                R.id.notif_cat_opt_6,
+                R.id.notif_cat_opt_7,
+                R.id.notif_cat_opt_8,
+                R.id.notif_cat_opt_9,
+                R.id.notif_cat_opt_10
+            };
+
+            String[] categories = isIncome ? INCOME_CATEGORIES : EXPENSE_CATEGORIES;
+            drawerView.setViewVisibility(R.id.notif_cat_row_5, isIncome ? View.GONE : View.VISIBLE);
+            drawerView.setViewVisibility(R.id.notif_cat_row_6, isIncome ? View.GONE : View.VISIBLE);
+
+            for (int i = 0; i < optIds.length; i++) {
+                int viewId = optIds[i];
+                if (i < categories.length) {
+                    String catOption = categories[i];
+                    boolean isSelected = catOption.equals(safeCategory);
+                    drawerView.setViewVisibility(viewId, View.VISIBLE);
+                    drawerView.setTextViewText(viewId, isSelected ? ("✓ " + catOption) : catOption);
+                    drawerView.setInt(
+                        viewId,
+                        "setBackgroundColor",
+                        isSelected ? headerColor : Color.parseColor("#1E293B")
+                    );
+
+                    Intent selectCatIntent = new Intent(context, SmsNotificationActionReceiver.class);
+                    selectCatIntent.setAction(ACTION_NOTIFICATION_BUTTON);
+                    selectCatIntent.putExtra(EXTRA_ACTION_TYPE, "select_category");
+                    selectCatIntent.putExtra(EXTRA_ITEM_ID, itemId);
+                    selectCatIntent.putExtra(EXTRA_TX_TYPE, type);
+                    selectCatIntent.putExtra(EXTRA_TX_AMOUNT, amount);
+                    selectCatIntent.putExtra(EXTRA_TX_CATEGORY, catOption);
+                    selectCatIntent.putExtra("notif_id", notifId);
+                    PendingIntent selectCatPi = PendingIntent.getBroadcast(
+                        context,
+                        notifId + 10 + i,
+                        selectCatIntent,
+                        piFlags
+                    );
+                    drawerView.setOnClickPendingIntent(viewId, selectCatPi);
+                } else {
+                    drawerView.setViewVisibility(viewId, View.GONE);
+                }
+            }
+
+            drawerView.setInt(R.id.notif_btn_save, "setBackgroundColor", headerColor);
             drawerView.setOnClickPendingIntent(R.id.notif_btn_save, savePendingIntent);
             drawerView.setOnClickPendingIntent(R.id.notif_btn_edit, editPendingIntent);
             drawerView.setOnClickPendingIntent(R.id.notif_btn_ignore, ignorePendingIntent);
 
             String fallbackTitle = "TRANSACTION DETECTED • " + formattedAmount;
-            String fallbackBody = shortLabel + " of " + formattedAmount + " detected. Tap Save, Edit, or Ignore.";
+            String fallbackBody = shortLabel + " of " + formattedAmount + " (" + safeCategory + ") detected.";
 
             NotificationCompat.Builder builder = new NotificationCompat.Builder(context, CHANNEL_ID)
                 .setSmallIcon(android.R.drawable.stat_notify_chat)
@@ -435,7 +659,7 @@ public final class SmsTransactionProcessor {
                 .setContentText(fallbackBody)
                 .setStyle(new NotificationCompat.BigTextStyle()
                     .setBigContentTitle("TRANSACTION DETECTED")
-                    .bigText(shortLabel + " • " + formattedAmount + "\nOnly Debit/Credit & Amount captured. Zero bank info stored.")
+                    .bigText(shortLabel + " • " + formattedAmount + " • Category: " + safeCategory + "\nOnly Debit/Credit & Amount captured. Zero bank info stored.")
                     .setSummaryText(typeLabel))
                 .setCustomContentView(collapsedView)
                 .setCustomBigContentView(drawerView)
@@ -443,7 +667,9 @@ public final class SmsTransactionProcessor {
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setCategory(NotificationCompat.CATEGORY_CALL)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setAutoCancel(true)
+                .setOnlyAlertOnce(silentUpdate)
+                .setSilent(silentUpdate)
+                .setAutoCancel(false)
                 .setContentIntent(contentPendingIntent)
                 .addAction(0, "Save", savePendingIntent)
                 .addAction(0, "Edit", editPendingIntent)

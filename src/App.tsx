@@ -37,10 +37,13 @@ import {
   uploadCloudBackup,
 } from './services/googleDriveBackup';
 import {
+  consumeNativeAutoSavedSmsTransactions,
   consumeNativeNotificationAction,
   consumeNativePendingSmsTransactions,
   consumeUrlSmsTrigger,
+  resolveNativeSmsTransaction,
   syncNativeSmsAutoDetectEnabled,
+  syncNativeSmsPullDownNotifEnabled,
 } from './services/smsTransactionParser';
 
 export default function App() {
@@ -53,6 +56,7 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings>(() => storage.getSettings());
   const [editingTransaction, setEditingTransaction] = useState<Transaction | null>(null);
   const [smsPrefillDraft, setSmsPrefillDraft] = useState<{
+    id?: string;
     type: TransactionType;
     amount: number;
     category: string;
@@ -150,6 +154,7 @@ export default function App() {
     const loadedSettings = storage.getSettings();
     setSettings(loadedSettings);
     syncNativeSmsAutoDetectEnabled(loadedSettings.smsAutoDetectEnabled !== false);
+    syncNativeSmsPullDownNotifEnabled(Boolean(loadedSettings.smsPullDownNotificationEnabled));
     if (loadedSettings.appLock && loadedSettings.customPinSet && loadedSettings.pinCode) {
       setIsLocked(true);
     }
@@ -163,43 +168,99 @@ export default function App() {
       id: string;
       type: TransactionType;
       amount: number;
+      category?: string;
     }) => {
-      const defaultCategory = actionObj.type === 'income' ? 'Salary' : 'Shopping';
+      const chosenCategory =
+        actionObj.category && actionObj.category.trim()
+          ? actionObj.category.trim()
+          : actionObj.type === 'income'
+          ? 'Salary'
+          : 'Shopping';
+      const deterministicTxId = actionObj.id ? `tx_${actionObj.id}` : undefined;
+      resolveNativeSmsTransaction(actionObj.id);
+
       if (actionObj.action === 'save') {
-        storage.addTransaction({
-          type: actionObj.type,
-          amount: actionObj.amount,
-          category: defaultCategory,
-          date: getTodayISO(),
-          note: '',
-        });
-        setTransactions(storage.getTransactions());
+        const alreadySaved = deterministicTxId
+          ? storage.hasTransactionWithId(deterministicTxId)
+          : false;
+        if (!alreadySaved) {
+          storage.addTransaction(
+            {
+              type: actionObj.type,
+              amount: actionObj.amount,
+              category: chosenCategory,
+              date: getTodayISO(),
+              note: '',
+            },
+            deterministicTxId
+          );
+          setTransactions(storage.getTransactions());
+          triggerSaveToast(
+            actionObj.type === 'income' ? 'Income saved successfully' : 'Expense saved successfully'
+          );
+          void maybeRunScheduledAutoBackup();
+        }
         const remaining = storage.removePendingSmsTransaction(actionObj.id);
         setSmsQueue(remaining);
-        triggerSaveToast(
-          actionObj.type === 'income' ? 'Income saved successfully' : 'Expense saved successfully'
-        );
-        void maybeRunScheduledAutoBackup();
       } else if (actionObj.action === 'edit') {
         const remaining = storage.removePendingSmsTransaction(actionObj.id);
         setSmsQueue(remaining);
         setEditingTransaction(null);
         setSmsPrefillDraft({
+          id: actionObj.id,
           type: actionObj.type,
           amount: actionObj.amount,
-          category: defaultCategory,
+          category: chosenCategory,
         });
         setCurrentScreen(actionObj.type === 'income' ? 'add-income' : 'add-expense');
       }
     };
 
-    // Drain any SMS transactions detected by Android SMS Receiver / NotificationListenerService or iOS URL trigger
+    // Drain any SMS transactions detected or auto-saved by Android SMS Receiver
     const syncDetectedSms = () => {
       const currentSettings = storage.getSettings();
       if (currentSettings.smsAutoDetectEnabled === false) return;
 
+      // 1. Drain any background notification/bubble "Save" items first so they are saved and removed from bubble queue
+      const autoSavedItems = consumeNativeAutoSavedSmsTransactions();
+      let addedAutoSave = false;
+      for (const item of autoSavedItems) {
+        const deterministicTxId = item.id ? `tx_${item.id}` : undefined;
+        if (!deterministicTxId || !storage.hasTransactionWithId(deterministicTxId)) {
+          const itemCategory =
+            item.category && item.category.trim()
+              ? item.category.trim()
+              : item.type === 'income'
+              ? 'Salary'
+              : 'Shopping';
+          storage.addTransaction(
+            {
+              type: item.type,
+              amount: item.amount,
+              category: itemCategory,
+              date: getTodayISO(),
+              note: '',
+            },
+            deterministicTxId
+          );
+          addedAutoSave = true;
+        }
+        if (item.id) {
+          storage.removePendingSmsTransaction(item.id);
+        }
+      }
+      if (addedAutoSave) {
+        setTransactions(storage.getTransactions());
+        void maybeRunScheduledAutoBackup();
+      }
+
+      // 2. Drain any pending SMS items for the floating in-app bubble
       const nativeDetected = consumeNativePendingSmsTransactions();
       for (const item of nativeDetected) {
+        const deterministicTxId = item.id ? `tx_${item.id}` : undefined;
+        if (deterministicTxId && storage.hasTransactionWithId(deterministicTxId)) {
+          continue;
+        }
         storage.enqueueDetectedSmsTransaction(item);
       }
 
@@ -225,8 +286,16 @@ export default function App() {
         amount?: number;
         detectedAt?: number;
         dismissedId?: string;
+        autoSavedId?: string;
       }>;
       const detail = customEvt.detail;
+      if (detail?.autoSavedId) {
+        // User tapped "Save" on the pull-down notification while the app was running in background/foreground
+        syncDetectedSms();
+        const remaining = storage.removePendingSmsTransaction(detail.autoSavedId);
+        setSmsQueue(remaining);
+        return;
+      }
       if (detail?.dismissedId) {
         const remaining = storage.removePendingSmsTransaction(detail.dismissedId);
         setSmsQueue(remaining);
@@ -238,6 +307,10 @@ export default function App() {
         typeof detail.amount === 'number' &&
         detail.amount > 0
       ) {
+        const deterministicTxId = detail.id ? `tx_${detail.id}` : undefined;
+        if (deterministicTxId && storage.hasTransactionWithId(deterministicTxId)) {
+          return;
+        }
         const updatedQueue = storage.enqueueDetectedSmsTransaction({
           id: detail.id,
           type: detail.type,
@@ -256,6 +329,7 @@ export default function App() {
         id?: string;
         type?: TransactionType;
         amount?: number;
+        category?: string;
       }>;
       const d = customEvt.detail;
       if (
@@ -270,6 +344,7 @@ export default function App() {
           id: String(d.id || ''),
           type: d.type,
           amount: d.amount,
+          category: d.category,
         });
       }
     };
@@ -345,7 +420,16 @@ export default function App() {
         return;
       }
 
-      // Pressing phone Back button triggers the same pop-up as clicking on Exit (#21)
+      // On any non-main screen, phone Back button acts as a normal Back button returning to dashboard
+      if (screen !== 'dashboard') {
+        setEditingTransaction(null);
+        setSmsPrefillDraft(null);
+        setCurrentScreen('dashboard');
+        storage.recordActivity();
+        return;
+      }
+
+      // Pressing phone Back button on the main dashboard screen triggers the Exit pop-up (#21)
       setExitModalOpen(true);
     };
 
@@ -423,7 +507,11 @@ export default function App() {
     if (editingTransaction) {
       storage.updateTransaction(editingTransaction.id, txData);
     } else {
-      storage.addTransaction(txData);
+      const customId = smsPrefillDraft?.id ? `tx_${smsPrefillDraft.id}` : undefined;
+      if (smsPrefillDraft?.id) {
+        resolveNativeSmsTransaction(smsPrefillDraft.id);
+      }
+      storage.addTransaction(txData, customId);
     }
     setTransactions(storage.getTransactions());
     setEditingTransaction(null);
@@ -454,16 +542,24 @@ export default function App() {
       note: string;
     }
   ) => {
-    storage.addTransaction(txData);
-    setTransactions(storage.getTransactions());
+    const deterministicTxId = itemId ? `tx_${itemId}` : undefined;
+    // Cancel the Android pull-down notification and mark itemId resolved so it cannot be saved twice
+    resolveNativeSmsTransaction(itemId);
+
+    const alreadySaved = deterministicTxId
+      ? storage.hasTransactionWithId(deterministicTxId)
+      : false;
+    if (!alreadySaved) {
+      storage.addTransaction(txData, deterministicTxId);
+      setTransactions(storage.getTransactions());
+      triggerSaveToast(
+        txData.type === 'income' ? 'Income saved successfully' : 'Expense saved successfully'
+      );
+      void maybeRunScheduledAutoBackup();
+    }
+
     const remaining = storage.removePendingSmsTransaction(itemId);
     setSmsQueue(remaining);
-
-    triggerSaveToast(
-      txData.type === 'income' ? 'Income saved successfully' : 'Expense saved successfully'
-    );
-
-    void maybeRunScheduledAutoBackup();
   };
 
   const handleEditSmsDetected = (
@@ -474,14 +570,19 @@ export default function App() {
       category: string;
     }
   ) => {
+    resolveNativeSmsTransaction(itemId);
     const remaining = storage.removePendingSmsTransaction(itemId);
     setSmsQueue(remaining);
     setEditingTransaction(null);
-    setSmsPrefillDraft(draft);
+    setSmsPrefillDraft({
+      id: itemId,
+      ...draft,
+    });
     setCurrentScreen(draft.type === 'income' ? 'add-income' : 'add-expense');
   };
 
   const handleDismissSmsDetected = (itemId: string) => {
+    resolveNativeSmsTransaction(itemId);
     const remaining = storage.removePendingSmsTransaction(itemId);
     setSmsQueue(remaining);
   };
@@ -562,19 +663,20 @@ export default function App() {
 
   return (
     <div
-      className={`min-h-screen flex justify-center items-start sm:py-6 selection:bg-blue-100 selection:text-blue-900 ${
+      className={`h-[100dvh] max-h-[100dvh] overflow-hidden flex justify-center items-start sm:py-6 selection:bg-blue-100 selection:text-blue-900 ${
         settings.appearance === 'Dark' ? 'dark bg-slate-950 text-slate-100' : 'bg-slate-100 text-slate-900'
       }`}
     >
       {/* Mobile viewport frame */}
-      <div className="w-full max-w-md min-h-screen sm:min-h-[844px] sm:max-h-[920px] bg-slate-50 dark:bg-slate-900 flex flex-col shadow-2xl sm:rounded-[36px] overflow-hidden border border-slate-200/80 dark:border-slate-800 relative transition-colors duration-200">
+      <div className="w-full max-w-md h-[100dvh] max-h-[100dvh] sm:h-[880px] sm:max-h-[92vh] bg-slate-50 dark:bg-slate-900 flex flex-col shadow-2xl sm:rounded-[36px] overflow-hidden border border-slate-200/80 dark:border-slate-800 relative transition-colors duration-200">
         {/* Loading Splash Screen */}
-        {isLoading && <SplashScreen />}
+        {isLoading && <SplashScreen logoVariant={settings.logoVariant || 'swoosh'} />}
 
         {/* First-Time User Welcome Screen (#18) */}
         {!isLoading && !isOnboarded ? (
           <WelcomeScreen
             initialProfile={profile}
+            logoVariant={settings.logoVariant || 'swoosh'}
             onComplete={handleCompleteWelcome}
             onRestoredFromCloud={handleCloudRestored}
           />
@@ -585,17 +687,18 @@ export default function App() {
               onOpenAddExpense={() => handleNavigate('add-expense')}
             />
 
-            {/* Top Header */}
+            {/* Top Header (Fixed, non-scrolling) */}
             <Header
               currentScreen={currentScreen}
               onBack={handleBack}
               onOpenDrawer={() => setDrawerOpen(true)}
               onOpenProfile={() => handleNavigate('profile')}
               profile={profile}
+              logoVariant={settings.logoVariant || 'swoosh'}
             />
 
-            {/* Main Screen Content */}
-            <main className="flex-1 flex flex-col overflow-y-auto">
+            {/* Main Screen Content (Scrollable area below fixed Header) */}
+            <main className="flex-1 min-h-0 flex flex-col overflow-y-auto overscroll-y-contain">
               {currentScreen === 'dashboard' && (
                 <DashboardScreen
                   transactions={transactions}
@@ -658,7 +761,11 @@ export default function App() {
               )}
 
               {currentScreen === 'about' && (
-                <AboutScreen />
+                <AboutScreen
+                  settings={settings}
+                  onUpdateSettings={handleUpdateSettings}
+                  onShowToast={triggerSaveToast}
+                />
               )}
 
               {currentScreen === 'profile' && (
@@ -682,6 +789,7 @@ export default function App() {
               onClose={() => setDrawerOpen(false)}
               onNavigate={handleNavigate}
               onRequestExit={() => setExitModalOpen(true)}
+              logoVariant={settings.logoVariant || 'swoosh'}
             />
           </>
         )}
@@ -689,7 +797,7 @@ export default function App() {
         {/* Small Fading Bottom Message for Saved Income / Expense (#22) */}
         {saveToastText && (
           <div
-            className={`fixed bottom-12 left-1/2 -translate-x-1/2 z-50 pointer-events-none transition-all duration-500 ${
+            className={`fixed bottom-16 left-1/2 -translate-x-1/2 z-50 pointer-events-none transition-all duration-500 ${
               saveToastVisible
                 ? 'opacity-100 translate-y-0'
                 : 'opacity-0 translate-y-2'

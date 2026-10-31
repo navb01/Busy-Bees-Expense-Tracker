@@ -4,9 +4,9 @@
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="vertical"
-    android:background="#FFFFFF">
+    android:background="#111827">
 
-    <!-- Truecaller-Style Colored Top Drawer Banner -->
+    <!-- Truecaller-Style Colored Top Drawer Banner (Green #16A34A for Credit, Red #DC2626 for Debit) -->
     <LinearLayout
         android:id="@+id/notif_drawer_header"
         android:layout_width="match_parent"
@@ -16,7 +16,7 @@
         android:paddingRight="16dp"
         android:paddingTop="14dp"
         android:paddingBottom="14dp"
-        android:background="#2357A4">
+        android:background="#DC2626">
 
         <LinearLayout
             android:layout_width="match_parent"
@@ -30,7 +30,7 @@
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
                 android:text="TRANSACTION DETECTED"
-                android:textColor="#E6FFFFFF"
+                android:textColor="#F0FDF4"
                 android:textSize="11sp"
                 android:textStyle="bold"
                 android:letterSpacing="0.08" />
@@ -43,8 +43,8 @@
                 android:paddingRight="8dp"
                 android:paddingTop="3dp"
                 android:paddingBottom="3dp"
-                android:background="#33FFFFFF"
-                android:text="CREDIT (INCOME)"
+                android:background="#33000000"
+                android:text="DEBIT (EXPENSE)"
                 android:textColor="#FFFFFF"
                 android:textSize="10sp"
                 android:textStyle="bold" />
@@ -54,11 +54,275 @@
             android:id="@+id/notif_drawer_amount"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="6dp"
+            android:layout_marginTop="4dp"
             android:text="₹0.00"
             android:textColor="#FFFFFF"
             android:textSize="26sp"
             android:textStyle="bold" />
+
+        <!-- Category Dropdown Selector Row (Tap to open/close category dropdown list) -->
+        <LinearLayout
+            android:id="@+id/notif_category_selector_row"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:layout_marginBottom="6dp"
+            android:paddingLeft="12dp"
+            android:paddingRight="12dp"
+            android:paddingTop="8dp"
+            android:paddingBottom="8dp"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:background="#38000000">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Category: "
+                android:textColor="#E2E8F0"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/notif_category_value"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Shopping"
+                android:textColor="#FFFFFF"
+                android:textSize="13sp"
+                android:textStyle="bold"
+                android:singleLine="true"
+                android:ellipsize="end" />
+
+            <TextView
+                android:id="@+id/notif_category_chevron"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="▼"
+                android:textColor="#FFFFFF"
+                android:textSize="11sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+
+        <!-- Expandable Category Dropdown Options Container (Toggled when user taps Category row) -->
+        <LinearLayout
+            android:id="@+id/notif_category_dropdown_list"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginBottom="8dp"
+            android:padding="6dp"
+            android:orientation="vertical"
+            android:background="#D90F172A"
+            android:visibility="gone">
+
+            <!-- Row 1 (Options 0 & 1) -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+                <TextView
+                    android:id="@+id/notif_cat_opt_0"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_margin="2dp"
+                    android:paddingLeft="8dp"
+                    android:paddingRight="8dp"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="6dp"
+                    android:background="#1E293B"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp"
+                    android:singleLine="true"
+                    android:ellipsize="end" />
+                <TextView
+                    android:id="@+id/notif_cat_opt_1"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_margin="2dp"
+                    android:paddingLeft="8dp"
+                    android:paddingRight="8dp"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="6dp"
+                    android:background="#1E293B"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp"
+                    android:singleLine="true"
+                    android:ellipsize="end" />
+            </LinearLayout>
+
+            <!-- Row 2 (Options 2 & 3) -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+                <TextView
+                    android:id="@+id/notif_cat_opt_2"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_margin="2dp"
+                    android:paddingLeft="8dp"
+                    android:paddingRight="8dp"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="6dp"
+                    android:background="#1E293B"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp"
+                    android:singleLine="true"
+                    android:ellipsize="end" />
+                <TextView
+                    android:id="@+id/notif_cat_opt_3"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_margin="2dp"
+                    android:paddingLeft="8dp"
+                    android:paddingRight="8dp"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="6dp"
+                    android:background="#1E293B"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp"
+                    android:singleLine="true"
+                    android:ellipsize="end" />
+            </LinearLayout>
+
+            <!-- Row 3 (Options 4 & 5) -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+                <TextView
+                    android:id="@+id/notif_cat_opt_4"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_margin="2dp"
+                    android:paddingLeft="8dp"
+                    android:paddingRight="8dp"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="6dp"
+                    android:background="#1E293B"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp"
+                    android:singleLine="true"
+                    android:ellipsize="end" />
+                <TextView
+                    android:id="@+id/notif_cat_opt_5"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_margin="2dp"
+                    android:paddingLeft="8dp"
+                    android:paddingRight="8dp"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="6dp"
+                    android:background="#1E293B"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp"
+                    android:singleLine="true"
+                    android:ellipsize="end" />
+            </LinearLayout>
+
+            <!-- Row 4 (Options 6 & 7) -->
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+                <TextView
+                    android:id="@+id/notif_cat_opt_6"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_margin="2dp"
+                    android:paddingLeft="8dp"
+                    android:paddingRight="8dp"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="6dp"
+                    android:background="#1E293B"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp"
+                    android:singleLine="true"
+                    android:ellipsize="end" />
+                <TextView
+                    android:id="@+id/notif_cat_opt_7"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_margin="2dp"
+                    android:paddingLeft="8dp"
+                    android:paddingRight="8dp"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="6dp"
+                    android:background="#1E293B"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp"
+                    android:singleLine="true"
+                    android:ellipsize="end" />
+            </LinearLayout>
+
+            <!-- Row 5 (Options 8 & 9 - used for Expense categories) -->
+            <LinearLayout
+                android:id="@+id/notif_cat_row_5"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+                <TextView
+                    android:id="@+id/notif_cat_opt_8"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_margin="2dp"
+                    android:paddingLeft="8dp"
+                    android:paddingRight="8dp"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="6dp"
+                    android:background="#1E293B"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp"
+                    android:singleLine="true"
+                    android:ellipsize="end" />
+                <TextView
+                    android:id="@+id/notif_cat_opt_9"
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_weight="1"
+                    android:layout_margin="2dp"
+                    android:paddingLeft="8dp"
+                    android:paddingRight="8dp"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="6dp"
+                    android:background="#1E293B"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp"
+                    android:singleLine="true"
+                    android:ellipsize="end" />
+            </LinearLayout>
+
+            <!-- Row 6 (Option 10 - used for Expense categories) -->
+            <LinearLayout
+                android:id="@+id/notif_cat_row_6"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:orientation="horizontal">
+                <TextView
+                    android:id="@+id/notif_cat_opt_10"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_margin="2dp"
+                    android:paddingLeft="8dp"
+                    android:paddingRight="8dp"
+                    android:paddingTop="6dp"
+                    android:paddingBottom="6dp"
+                    android:background="#1E293B"
+                    android:textColor="#FFFFFF"
+                    android:textSize="11sp"
+                    android:singleLine="true"
+                    android:ellipsize="end" />
+            </LinearLayout>
+        </LinearLayout>
 
         <TextView
             android:id="@+id/notif_drawer_subtitle"
@@ -66,7 +330,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="2dp"
             android:text="Only Debit/Credit &amp; Amount captured • Zero bank info stored"
-            android:textColor="#CCFFFFFF"
+            android:textColor="#E6FFFFFF"
             android:textSize="11sp" />
     </LinearLayout>
 
@@ -79,16 +343,16 @@
         android:paddingRight="12dp"
         android:paddingTop="10dp"
         android:paddingBottom="10dp"
-        android:background="#F8FAFC">
+        android:background="#111827">
 
         <TextView
             android:id="@+id/notif_btn_save"
             android:layout_width="0dp"
-            android:layout_height="38dp"
+            android:layout_height="40dp"
             android:layout_weight="1"
             android:layout_marginRight="4dp"
             android:gravity="center"
-            android:background="#2357A4"
+            android:background="#DC2626"
             android:text="Save"
             android:textColor="#FFFFFF"
             android:textSize="13sp"
@@ -97,27 +361,27 @@
         <TextView
             android:id="@+id/notif_btn_edit"
             android:layout_width="0dp"
-            android:layout_height="38dp"
+            android:layout_height="40dp"
             android:layout_weight="1"
             android:layout_marginLeft="4dp"
             android:layout_marginRight="4dp"
             android:gravity="center"
-            android:background="#E2E8F0"
+            android:background="#334155"
             android:text="Edit"
-            android:textColor="#1E293B"
+            android:textColor="#FFFFFF"
             android:textSize="13sp"
             android:textStyle="bold" />
 
         <TextView
             android:id="@+id/notif_btn_ignore"
             android:layout_width="0dp"
-            android:layout_height="38dp"
+            android:layout_height="40dp"
             android:layout_weight="1"
             android:layout_marginLeft="4dp"
             android:gravity="center"
-            android:background="#F1F5F9"
+            android:background="#090D16"
             android:text="Ignore"
-            android:textColor="#64748B"
+            android:textColor="#CBD5E1"
             android:textSize="13sp"
             android:textStyle="bold" />
     </LinearLayout>

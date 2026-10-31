@@ -596,13 +596,13 @@ export async function findCloudBackup(token: string): Promise<CloudBackupFileInf
 }
 
 /**
- * Uploads or overwrites the Busy Bees backup snapshot in Google Drive.
+ * Uploads or overwrites the Busy Bees backup snapshot in Google Drive in the background.
  */
 export async function uploadCloudBackup(
   token: string,
   snapshot: AppBackupSnapshot,
   existingFileId?: string,
-  interactiveSave = true
+  interactiveSave = false
 ): Promise<CloudBackupFileInfo> {
   const jsonContent = JSON.stringify(snapshot, null, 2);
   const contentBytes = new TextEncoder().encode(jsonContent).length;
@@ -626,7 +626,7 @@ export async function uploadCloudBackup(
               sizeBytes: detail.sizeBytes || contentBytes,
             });
           } else {
-            reject(new Error(detail?.error || 'Backup cancelled'));
+            reject(new Error(detail?.error || 'Backup failed'));
           }
         };
         window.addEventListener('bb-native-drive-backup-result', handler);
@@ -656,6 +656,18 @@ export async function uploadCloudBackup(
     };
   }
 
+  let resolvedFileId = existingFileId;
+  if (!resolvedFileId) {
+    try {
+      const existing = await findCloudBackup(token);
+      if (existing?.id) {
+        resolvedFileId = existing.id;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   const metadata: Record<string, unknown> = {
     name: BACKUP_FILE_NAME,
     mimeType: 'application/json',
@@ -667,7 +679,7 @@ export async function uploadCloudBackup(
     },
   };
 
-  if (!existingFileId) {
+  if (!resolvedFileId) {
     metadata.parents = ['appDataFolder'];
   }
 
@@ -684,11 +696,11 @@ export async function uploadCloudBackup(
     jsonContent +
     closeDelimiter;
 
-  const uploadUrl = existingFileId
-    ? `https://www.googleapis.com/upload/drive/v3/files/${existingFileId}?uploadType=multipart&fields=id,name,modifiedTime,size,appProperties`
+  const uploadUrl = resolvedFileId
+    ? `https://www.googleapis.com/upload/drive/v3/files/${resolvedFileId}?uploadType=multipart&fields=id,name,modifiedTime,size,appProperties`
     : `https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime,size,appProperties`;
 
-  const method = existingFileId ? 'PATCH' : 'POST';
+  const method = resolvedFileId ? 'PATCH' : 'POST';
 
   const res = await driveFetch(uploadUrl, token, {
     method,

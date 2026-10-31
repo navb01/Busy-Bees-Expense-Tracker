@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { AppSettings, CURRENCY_CONFIGS, Transaction } from '../../types';
 import { getTodayISO, storage } from '../../services/storage';
+import { BusyBeesLogo } from '../BusyBeesLogo';
 
 interface DashboardScreenProps {
   transactions: Transaction[];
@@ -170,7 +171,7 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
       : [];
 
   return (
-    <div className="flex-1 px-5 py-6 pb-24 overflow-y-auto max-w-lg mx-auto w-full">
+    <div className="flex-1 px-5 pt-6 pb-28 sm:pb-10 max-w-lg mx-auto w-full">
       {/* Month Navigator & Summary Card Container */}
       <div className="bg-white dark:bg-slate-800 rounded-3xl p-5 border border-slate-200/90 dark:border-slate-700/80 shadow-sm transition">
         <div className="flex items-center justify-between mb-4">
@@ -388,6 +389,9 @@ export const DashboardScreen: React.FC<DashboardScreenProps> = ({
 
         {displayedTransactions.length === 0 ? (
           <div className="bg-white dark:bg-slate-800 rounded-2xl p-7 border border-slate-200/80 dark:border-slate-700/80 text-center shadow-xs">
+            <div className="flex justify-center mb-2.5">
+              <BusyBeesLogo variant="mascot" size={48} animated={false} />
+            </div>
             <p className="text-slate-600 dark:text-slate-300 text-sm font-medium">
               {viewScope === 'today' ? "No transactions logged today." : "No records for this month."}
             </p>

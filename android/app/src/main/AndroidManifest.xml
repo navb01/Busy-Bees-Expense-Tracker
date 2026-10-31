@@ -58,20 +58,15 @@
             </intent-filter>
         </receiver>
 
-        <!-- FB Messenger-Style Draggable Floating Bubble Service -->
+        <!-- Floating Bubble Overlay Service -->
         <service
             android:name=".SmsFloatingBubbleService"
-            android:exported="false" />
-
-        <!-- NotificationListenerService for RCS / Messaging Notifications -->
-        <service
-            android:name=".SmsNotificationListenerService"
-            android:label="@string/app_name"
-            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.service.notification.NotificationListenerService" />
-            </intent-filter>
+            android:enabled="true"
+            android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="sms_transaction_floating_bubble" />
         </service>
     </application>
 
@@ -81,4 +76,6 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.RECEIVE_SMS" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 </manifest>

@@ -28,7 +28,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ profile, onSavePro
   return (
     <form
       onSubmit={handleSubmit}
-      className="flex-1 flex flex-col justify-between px-6 py-6 max-w-lg mx-auto w-full overflow-y-auto"
+      className="flex-1 flex flex-col justify-between px-6 pt-6 pb-20 sm:pb-8 max-w-lg mx-auto w-full"
     >
       <div className="space-y-6">
         <div>
@@ -107,7 +107,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ profile, onSavePro
         )}
       </div>
 
-      <div className="pt-6 mt-6">
+      <div className="pt-6 mt-6 pb-6 sm:pb-0">
         <button
           type="submit"
           className="w-full py-4 rounded-xl text-white font-semibold text-base bg-[#2357A4] hover:bg-[#1D4A8C] active:scale-[0.99] transition shadow-sm"

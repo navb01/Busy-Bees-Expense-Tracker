@@ -44,7 +44,7 @@ export const ExitScreen: React.FC<ExitScreenProps> = ({ onCancel, onConfirmExit 
   };
 
   return (
-    <div className="flex-1 flex flex-col justify-between px-6 py-6 max-w-lg mx-auto w-full overflow-y-auto">
+    <div className="flex-1 flex flex-col justify-between px-6 pt-6 pb-20 sm:pb-8 max-w-lg mx-auto w-full">
       <div className="space-y-6 pt-4">
         {/* Exit Icon in rounded square */}
         <div className="w-14 h-14 rounded-2xl bg-blue-50/80 dark:bg-blue-950/60 border border-blue-100 dark:border-blue-900 flex items-center justify-center text-[#2357A4] dark:text-blue-400">
@@ -65,7 +65,7 @@ export const ExitScreen: React.FC<ExitScreenProps> = ({ onCancel, onConfirmExit 
       </div>
 
       {/* Buttons */}
-      <div className="pt-6 mt-6 space-y-3">
+      <div className="pt-6 mt-6 pb-6 sm:pb-0 space-y-3">
         <button
           type="button"
           onClick={handleExit}

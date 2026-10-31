@@ -29,6 +29,7 @@ import {
   openSmsNotificationAccessSettings,
   requestOverlayBubblePermission,
   syncNativeSmsAutoDetectEnabled,
+  syncNativeSmsPullDownNotifEnabled,
 } from '../../services/smsTransactionParser';
 
 interface SettingsScreenProps {
@@ -57,7 +58,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   const [appearanceModalOpen, setAppearanceModalOpen] = useState(false);
   const [nativeSmsSupported, setNativeSmsSupported] = useState(false);
   const [nativeSmsAccessGranted, setNativeSmsAccessGranted] = useState(false);
-  const [overlayBubbleGranted, setOverlayBubbleGranted] = useState(false);
+  const [overlayBubbleGranted, setOverlayBubbleGranted] = useState(true);
 
   // PIN Setup / Change / Verify Modal state
   const [pinModalMode, setPinModalMode] = useState<PinModalMode>(null);
@@ -316,7 +317,7 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
   };
 
   return (
-    <div className="flex-1 px-6 py-6 max-w-lg mx-auto w-full overflow-y-auto space-y-7 pb-20">
+    <div className="flex-1 px-6 pt-6 pb-28 sm:pb-10 max-w-lg mx-auto w-full space-y-7">
       {/* GENERAL section */}
       <div>
         <h3 className="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider mb-3">
@@ -544,7 +545,6 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
 
           {settings.smsAutoDetectEnabled !== false && nativeSmsSupported && (
             <>
-              {/* Android Smart SMS Permission Status / Button */}
               <div className="p-4 flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <span className="block text-[14px] text-slate-800 dark:text-slate-100 font-medium">
@@ -569,7 +569,6 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                 </button>
               </div>
 
-              {/* Floating Bubble Overlay Permission Row */}
               <div className="p-4 flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <span className="block text-[14px] text-slate-800 dark:text-slate-100 font-medium">
@@ -577,8 +576,8 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                   </span>
                   <span className="block text-xs text-slate-400 dark:text-slate-400 mt-0.5">
                     {overlayBubbleGranted
-                      ? 'Active — Shows draggable bubble over other apps'
-                      : 'Show FB Messenger-style floating bubble over apps'}
+                      ? 'Active — Shows maximised green/red bubble on screen'
+                      : 'Allow displaying floating transaction bubble over apps'}
                   </span>
                 </div>
                 <button
@@ -590,10 +589,49 @@ export const SettingsScreen: React.FC<SettingsScreenProps> = ({
                       : 'bg-[#2357A4] hover:bg-[#1D4A8C] text-white'
                   }`}
                 >
-                  {overlayBubbleGranted ? 'Enabled' : 'Enable Bubble'}
+                  {overlayBubbleGranted ? 'Enabled' : 'Enable'}
                 </button>
               </div>
             </>
+          )}
+
+          {settings.smsAutoDetectEnabled !== false && (
+            <div className="p-4 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <span className="block text-[14px] text-slate-800 dark:text-slate-100 font-medium">
+                  Pull-Down Notification
+                </span>
+                <p className="text-xs text-slate-400 dark:text-slate-400 mt-0.5 leading-relaxed">
+                  Show Truecaller-style pull-down status bar alert in addition to the floating bubble (disabled by default).
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !Boolean(settings.smsPullDownNotificationEnabled);
+                  onUpdateSettings({ smsPullDownNotificationEnabled: next });
+                  syncNativeSmsPullDownNotifEnabled(next);
+                  onShowToast?.(
+                    next
+                      ? 'Pull-down SMS notification enabled'
+                      : 'Pull-down SMS notification disabled'
+                  );
+                }}
+                role="switch"
+                aria-checked={Boolean(settings.smsPullDownNotificationEnabled)}
+                className={`relative inline-flex h-7 w-12 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none ${
+                  settings.smsPullDownNotificationEnabled
+                    ? 'bg-[#2357A4]'
+                    : 'bg-slate-200 dark:bg-slate-700'
+                }`}
+              >
+                <span
+                  className={`pointer-events-none inline-block h-6 w-6 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                    settings.smsPullDownNotificationEnabled ? 'translate-x-5' : 'translate-x-0'
+                  }`}
+                />
+              </button>
+            </div>
           )}
         </div>
       </div>

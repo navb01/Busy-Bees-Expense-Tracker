@@ -4,21 +4,35 @@ import android.Manifest;
 import android.accounts.AccountManager;
 import android.app.Activity;
 import android.app.NotificationManager;
+import android.app.backup.BackupManager;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
+import android.content.ContentResolver;
+import android.content.ContentUris;
+import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.database.Cursor;
+import android.graphics.Canvas;
+import android.graphics.Color;
+import android.graphics.Paint;
+import android.graphics.RectF;
+import android.graphics.Typeface;
+import android.graphics.pdf.PdfDocument;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
+import android.provider.MediaStore;
 import android.provider.Settings;
 import android.text.TextUtils;
 import android.view.View;
 import android.view.Window;
 import android.webkit.JavascriptInterface;
+import android.widget.Toast;
 import androidx.activity.OnBackPressedCallback;
 import androidx.annotation.NonNull;
 import androidx.biometric.BiometricManager;
@@ -29,6 +43,7 @@ import androidx.core.view.WindowCompat;
 import androidx.core.view.WindowInsetsControllerCompat;
 import com.getcapacitor.BridgeActivity;
 import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
@@ -40,6 +55,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.Executor;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 public class MainActivity extends BridgeActivity {
 
@@ -47,6 +64,7 @@ public class MainActivity extends BridgeActivity {
     private static final int REQ_CODE_PICK_GOOGLE_ACCOUNT = 4102;
     private static final int REQ_CODE_DRIVE_CREATE_DOC = 4103;
     private static final int REQ_CODE_DRIVE_OPEN_DOC = 4104;
+    private static final int REQ_CODE_EXPORT_CREATE_DOC = 4105;
 
     private static final String DRIVE_PREFS_NAME = "bb_native_drive_prefs";
     private static final String KEY_DRIVE_EMAIL = "connected_google_email";
@@ -55,11 +73,42 @@ public class MainActivity extends BridgeActivity {
     private static final String KEY_PENDING_NOTIF_ACTION = "pending_notif_action_json";
 
     private String pendingBackupJsonToWrite = null;
+    private byte[] pendingExportBytesToWrite = null;
+    private String pendingExportFormat = null;
+    private String pendingExportFileName = null;
+    private String pendingExportMimeType = null;
+    private Uri lastExportedFileUri = null;
+    private String lastExportedFileMime = null;
+    private long permissionRequestStartMs = 0L;
+    private boolean userInitiatedPermissionRequest = false;
 
     private final BroadcastReceiver smsDetectedReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
             if (intent == null || bridge == null || bridge.getWebView() == null) return;
+
+            String autoSavedId = intent.getStringExtra("autoSavedId");
+            if (autoSavedId != null) {
+                String safeAutoId = autoSavedId.replace("'", "");
+                String txType = intent.getStringExtra("type");
+                String safeType = "income".equals(txType) ? "income" : "expense";
+                double amount = intent.getDoubleExtra("amount", 0.0);
+                String cat = intent.getStringExtra("category");
+                String safeCat = (cat != null && !cat.isEmpty())
+                    ? cat.replace("'", "")
+                    : ("income".equals(safeType) ? "Salary" : "Shopping");
+                String js = String.format(
+                    Locale.US,
+                    "window.dispatchEvent(new CustomEvent('bb-sms-detected', { detail: { autoSavedId: '%s', dismissedId: '%s', type: '%s', amount: %.2f, category: '%s' } }));",
+                    safeAutoId,
+                    safeAutoId,
+                    safeType,
+                    amount,
+                    safeCat
+                );
+                bridge.getWebView().evaluateJavascript(js, null);
+                return;
+            }
 
             String dismissedId = intent.getStringExtra("dismissedId");
             if (dismissedId != null) {
@@ -138,20 +187,17 @@ public class MainActivity extends BridgeActivity {
 
                 @JavascriptInterface
                 public boolean isSmsNotificationAccessGranted() {
-                    return isDirectSmsPermissionGranted() || isNotificationListenerEnabled();
+                    return hasDirectSmsPermission();
                 }
 
                 @JavascriptInterface
                 public boolean isDirectSmsPermissionGranted() {
-                    return ContextCompat.checkSelfPermission(
-                        MainActivity.this,
-                        Manifest.permission.RECEIVE_SMS
-                    ) == PackageManager.PERMISSION_GRANTED;
+                    return hasDirectSmsPermission();
                 }
 
                 @JavascriptInterface
                 public boolean isNotificationListenerAccessGranted() {
-                    return isNotificationListenerEnabled();
+                    return hasDirectSmsPermission();
                 }
 
                 @JavascriptInterface
@@ -171,6 +217,7 @@ public class MainActivity extends BridgeActivity {
                                     Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
                                     Uri.parse("package:" + getPackageName())
                                 );
+                                intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
                                 startActivity(intent);
                             } catch (Exception ignored) {
                             }
@@ -180,34 +227,33 @@ public class MainActivity extends BridgeActivity {
 
                 @JavascriptInterface
                 public void requestSmsRuntimePermission() {
-                    runOnUiThread(() -> promptForSmsAndNotificationPermissions());
+                    runOnUiThread(() -> {
+                        userInitiatedPermissionRequest = false;
+                        promptForSmsAndNotificationPermissions();
+                    });
                 }
 
                 @JavascriptInterface
                 public void openSmsNotificationAccessSettings() {
                     runOnUiThread(() -> {
-                        // First request standard runtime permission if not yet granted (Truecaller-style 1-tap dialog)
-                        if (!isDirectSmsPermissionGranted()) {
+                        if (!hasDirectSmsPermission()) {
+                            userInitiatedPermissionRequest = true;
                             promptForSmsAndNotificationPermissions();
                             return;
                         }
-                        try {
-                            Intent intent = new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS);
-                            startActivity(intent);
-                        } catch (Exception ignored) {
+                        // If SMS is already granted, ensure POST_NOTIFICATIONS is also granted on Android 13+
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                            ContextCompat.checkSelfPermission(MainActivity.this, Manifest.permission.POST_NOTIFICATIONS)
+                                != PackageManager.PERMISSION_GRANTED) {
+                            userInitiatedPermissionRequest = true;
+                            promptForSmsAndNotificationPermissions();
                         }
                     });
                 }
 
                 @JavascriptInterface
                 public void openNotificationListenerSettingsDirect() {
-                    runOnUiThread(() -> {
-                        try {
-                            Intent intent = new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS);
-                            startActivity(intent);
-                        } catch (Exception ignored) {
-                        }
-                    });
+                    runOnUiThread(() -> openAppDetailsSettings());
                 }
 
                 @JavascriptInterface
@@ -222,6 +268,29 @@ public class MainActivity extends BridgeActivity {
                     );
                     prefs.edit().putString(SmsTransactionProcessor.KEY_PENDING_QUEUE, "[]").apply();
                     return pending != null ? pending : "[]";
+                }
+
+                @JavascriptInterface
+                public String consumeAutoSavedSmsTransactions() {
+                    SharedPreferences prefs = getSharedPreferences(
+                        SmsTransactionProcessor.PREFS_NAME,
+                        Context.MODE_PRIVATE
+                    );
+                    String autoSaved = prefs.getString(
+                        SmsTransactionProcessor.KEY_AUTO_SAVED_QUEUE,
+                        "[]"
+                    );
+                    prefs.edit().putString(SmsTransactionProcessor.KEY_AUTO_SAVED_QUEUE, "[]").apply();
+                    return autoSaved != null ? autoSaved : "[]";
+                }
+
+                @JavascriptInterface
+                public void resolveSmsTransactionInNative(String itemId) {
+                    if (itemId == null || itemId.isEmpty()) return;
+                    SmsTransactionProcessor.resolveAndCancelNotification(
+                        MainActivity.this.getApplicationContext(),
+                        itemId
+                    );
                 }
 
                 @JavascriptInterface
@@ -250,6 +319,27 @@ public class MainActivity extends BridgeActivity {
                     if (enabled && !isDirectSmsPermissionGranted()) {
                         runOnUiThread(() -> promptForSmsAndNotificationPermissions());
                     }
+                }
+
+                @JavascriptInterface
+                public boolean isSmsPullDownNotificationEnabled() {
+                    SharedPreferences prefs = getSharedPreferences(
+                        SmsTransactionProcessor.PREFS_NAME,
+                        Context.MODE_PRIVATE
+                    );
+                    return prefs.getBoolean(SmsTransactionProcessor.KEY_PULLDOWN_NOTIF_ENABLED, false);
+                }
+
+                @JavascriptInterface
+                public void setSmsPullDownNotificationEnabled(boolean enabled) {
+                    SharedPreferences prefs = getSharedPreferences(
+                        SmsTransactionProcessor.PREFS_NAME,
+                        Context.MODE_PRIVATE
+                    );
+                    prefs.edit().putBoolean(
+                        SmsTransactionProcessor.KEY_PULLDOWN_NOTIF_ENABLED,
+                        enabled
+                    ).apply();
                 }
 
                 // =========================================================================
@@ -281,18 +371,16 @@ public class MainActivity extends BridgeActivity {
                 @JavascriptInterface
                 public void saveBackupToGoogleDrive(String jsonContent, String fileName, boolean interactiveSaveToDrive) {
                     if (jsonContent == null || jsonContent.isEmpty()) return;
-                    long now = System.currentTimeMillis();
+                    final long now = System.currentTimeMillis();
+                    final int sizeBytes = jsonContent.getBytes(StandardCharsets.UTF_8).length;
 
-                    // 1. Always persist to internal Auto-Backup file + preferences cache
-                    saveInternalBackupCopy(jsonContent, now);
-
-                    if (!interactiveSaveToDrive) {
-                        dispatchDriveEvent("bb-native-drive-backup-result", true, "", now, jsonContent.getBytes(StandardCharsets.UTF_8).length);
-                        return;
-                    }
-
-                    // 2. Launch Google Drive document saver sheet so user can also store the file visibly in Google Drive
-                    runOnUiThread(() -> launchGoogleDriveCreateDocument(jsonContent, fileName != null ? fileName : "busy_bees_expense_tracker_backup.json"));
+                    // Always execute silently in the background: overwrite previous backup and trigger Android Cloud Auto-Backup
+                    new Thread(() -> {
+                        saveInternalBackupCopy(jsonContent, now);
+                        runOnUiThread(() ->
+                            dispatchDriveEvent("bb-native-drive-backup-result", true, "", now, sizeBytes)
+                        );
+                    }).start();
                 }
 
                 @JavascriptInterface
@@ -324,24 +412,100 @@ public class MainActivity extends BridgeActivity {
 
                 @JavascriptInterface
                 public void openGoogleDriveRestorePicker() {
-                    runOnUiThread(() -> launchGoogleDriveOpenDocument());
+                    // Restore silently in the background without opening any file picker window
+                    new Thread(() -> {
+                        String json = readInternalBackupCopy();
+                        if (json != null && !json.trim().isEmpty()) {
+                            runOnUiThread(() -> dispatchDriveRestoreResult(true, json, ""));
+                        } else {
+                            runOnUiThread(() -> dispatchDriveRestoreResult(false, "", "No backup file found for this account."));
+                        }
+                    }).start();
                 }
 
                 @JavascriptInterface
                 public void deleteCachedBackup() {
-                    try {
-                        SharedPreferences prefs = getSharedPreferences(DRIVE_PREFS_NAME, Context.MODE_PRIVATE);
-                        prefs.edit()
-                            .remove(KEY_DRIVE_LAST_JSON)
-                            .remove(KEY_DRIVE_LAST_MODIFIED)
-                            .apply();
-                        File f = new File(getFilesDir(), "busy_bees_expense_tracker_backup.json");
-                        if (f.exists()) {
-                            //noinspection ResultOfMethodCallIgnored
-                            f.delete();
+                    new Thread(() -> {
+                        try {
+                            SharedPreferences prefs = getSharedPreferences(DRIVE_PREFS_NAME, Context.MODE_PRIVATE);
+                            prefs.edit()
+                                .remove(KEY_DRIVE_LAST_JSON)
+                                .remove(KEY_DRIVE_LAST_MODIFIED)
+                                .apply();
+                            File f = new File(getFilesDir(), "busy_bees_expense_tracker_backup.json");
+                            if (f.exists()) {
+                                //noinspection ResultOfMethodCallIgnored
+                                f.delete();
+                            }
+                            File extDir = getExternalFilesDir(null);
+                            if (extDir != null) {
+                                File extFile = new File(extDir, "busy_bees_expense_tracker_backup.json");
+                                if (extFile.exists()) {
+                                    //noinspection ResultOfMethodCallIgnored
+                                    extFile.delete();
+                                }
+                            }
+                            deleteMediaStoreBackupCopy();
+                        } catch (Exception ignored) {
                         }
-                    } catch (Exception ignored) {
-                    }
+                    }).start();
+                }
+
+                // =========================================================================
+                // NATIVE ANDROID PDF & CSV EXPORT BRIDGE
+                // =========================================================================
+
+                @JavascriptInterface
+                public void exportPdfDocument(String reportJson, String fileName) {
+                    runOnUiThread(() -> {
+                        try {
+                            byte[] pdfBytes = generatePdfBytesFromReportJson(reportJson);
+                            String safeName = (fileName != null && !fileName.isEmpty())
+                                ? fileName
+                                : "busy_bees_report.pdf";
+                            launchExportCreateDocument(pdfBytes, safeName, "application/pdf", "pdf");
+                        } catch (Exception e) {
+                            dispatchExportResult(false, "pdf", "", "Failed to generate PDF report.");
+                        }
+                    });
+                }
+
+                @JavascriptInterface
+                public void exportCsvDocument(String csvContent, String fileName) {
+                    runOnUiThread(() -> {
+                        try {
+                            String withBom = "\uFEFF" + (csvContent != null ? csvContent : "");
+                            byte[] csvBytes = withBom.getBytes(StandardCharsets.UTF_8);
+                            String safeName = (fileName != null && !fileName.isEmpty())
+                                ? fileName
+                                : "busy_bees_report.csv";
+                            launchExportCreateDocument(csvBytes, safeName, "text/csv", "csv");
+                        } catch (Exception e) {
+                            dispatchExportResult(false, "csv", "", "Failed to generate CSV file.");
+                        }
+                    });
+                }
+
+                @JavascriptInterface
+                public void openLastExportedFile() {
+                    runOnUiThread(() -> {
+                        if (lastExportedFileUri == null) return;
+                        try {
+                            Intent viewIntent = new Intent(Intent.ACTION_VIEW);
+                            viewIntent.setDataAndType(
+                                lastExportedFileUri,
+                                lastExportedFileMime != null ? lastExportedFileMime : "application/pdf"
+                            );
+                            viewIntent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+                            startActivity(Intent.createChooser(viewIntent, "Open exported file"));
+                        } catch (Exception e) {
+                            Toast.makeText(
+                                MainActivity.this,
+                                "No app found to open this file type. File is saved in your selected folder.",
+                                Toast.LENGTH_LONG
+                            ).show();
+                        }
+                    });
                 }
             }, "BusyBeesNative");
         }
@@ -390,20 +554,26 @@ public class MainActivity extends BridgeActivity {
             String itemId = intent.getStringExtra(SmsTransactionProcessor.EXTRA_ITEM_ID);
             String txType = intent.getStringExtra(SmsTransactionProcessor.EXTRA_TX_TYPE);
             double txAmount = intent.getDoubleExtra(SmsTransactionProcessor.EXTRA_TX_AMOUNT, 0.0);
+            String txCategory = intent.getStringExtra(SmsTransactionProcessor.EXTRA_TX_CATEGORY);
 
             if ((actionType != null && !actionType.isEmpty()) && itemId != null) {
                 intent.removeExtra(SmsTransactionProcessor.EXTRA_ACTION_TYPE);
+                SmsTransactionProcessor.resolveAndCancelNotification(getApplicationContext(), itemId);
                 String safeAction = actionType.replace("\"", "");
                 String safeId = itemId.replace("\"", "");
                 String safeTxType = "income".equals(txType) ? "income" : "expense";
+                String safeCategory = (txCategory != null && !txCategory.trim().isEmpty())
+                    ? txCategory.trim().replace("\"", "")
+                    : ("income".equals(safeTxType) ? "Salary" : "Shopping");
 
                 String actionJson = String.format(
                     Locale.US,
-                    "{\"action\":\"%s\",\"id\":\"%s\",\"type\":\"%s\",\"amount\":%.2f}",
+                    "{\"action\":\"%s\",\"id\":\"%s\",\"type\":\"%s\",\"amount\":%.2f,\"category\":\"%s\"}",
                     safeAction,
                     safeId,
                     safeTxType,
-                    txAmount
+                    txAmount,
+                    safeCategory
                 );
 
                 SharedPreferences prefs = getSharedPreferences(DRIVE_PREFS_NAME, Context.MODE_PRIVATE);
@@ -418,11 +588,29 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
+    private boolean hasDirectSmsPermission() {
+        return ContextCompat.checkSelfPermission(
+            this,
+            Manifest.permission.RECEIVE_SMS
+        ) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void openAppDetailsSettings() {
+        try {
+            Intent intent = new Intent(
+                Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                Uri.fromParts("package", getPackageName(), null)
+            );
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            startActivity(intent);
+        } catch (Exception ignored) {
+        }
+    }
+
     private void promptForSmsAndNotificationPermissions() {
         try {
             List<String> needed = new ArrayList<>();
-            if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECEIVE_SMS)
-                != PackageManager.PERMISSION_GRANTED) {
+            if (!hasDirectSmsPermission()) {
                 needed.add(Manifest.permission.RECEIVE_SMS);
             }
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -432,6 +620,7 @@ public class MainActivity extends BridgeActivity {
                 }
             }
             if (!needed.isEmpty()) {
+                permissionRequestStartMs = System.currentTimeMillis();
                 ActivityCompat.requestPermissions(
                     this,
                     needed.toArray(new String[0]),
@@ -452,11 +641,15 @@ public class MainActivity extends BridgeActivity {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode == REQ_CODE_SMS_PERMISSIONS) {
-            boolean smsGranted = ContextCompat.checkSelfPermission(
-                this,
-                Manifest.permission.RECEIVE_SMS
-            ) == PackageManager.PERMISSION_GRANTED;
-            dispatchSmsPermissionEvent(smsGranted || isNotificationListenerEnabled());
+            boolean smsGranted = hasDirectSmsPermission();
+            long elapsed = System.currentTimeMillis() - permissionRequestStartMs;
+            if (!smsGranted && userInitiatedPermissionRequest && elapsed < 350L) {
+                // System suppressed the runtime popup (e.g. Don't ask again); open App Permissions page directly
+                userInitiatedPermissionRequest = false;
+                openAppDetailsSettings();
+            }
+            userInitiatedPermissionRequest = false;
+            dispatchSmsPermissionEvent(smsGranted);
         }
     }
 
@@ -638,28 +831,471 @@ public class MainActivity extends BridgeActivity {
                 }
             }
             dispatchDriveRestoreResult(false, "", "popup-closed-by-user");
+            return;
         }
+
+        if (requestCode == REQ_CODE_EXPORT_CREATE_DOC) {
+            byte[] bytes = pendingExportBytesToWrite;
+            String fmt = pendingExportFormat != null ? pendingExportFormat : "pdf";
+            String fName = pendingExportFileName != null ? pendingExportFileName : "";
+            String mime = pendingExportMimeType != null ? pendingExportMimeType : "application/pdf";
+
+            pendingExportBytesToWrite = null;
+            pendingExportFormat = null;
+            pendingExportFileName = null;
+            pendingExportMimeType = null;
+
+            if (resultCode == Activity.RESULT_OK && data != null && data.getData() != null && bytes != null) {
+                Uri uri = data.getData();
+                try (OutputStream os = getContentResolver().openOutputStream(uri)) {
+                    if (os != null) {
+                        os.write(bytes);
+                        os.flush();
+                        lastExportedFileUri = uri;
+                        lastExportedFileMime = mime;
+                        Toast.makeText(
+                            this,
+                            ("pdf".equals(fmt) ? "PDF saved: " : "CSV saved: ") + fName,
+                            Toast.LENGTH_SHORT
+                        ).show();
+                        dispatchExportResult(true, fmt, fName, "");
+                        return;
+                    }
+                } catch (Exception e) {
+                    dispatchExportResult(false, fmt, fName, "Could not write file to selected location.");
+                    return;
+                }
+            }
+            dispatchExportResult(false, fmt, fName, "cancelled");
+        }
+    }
+
+    private void launchExportCreateDocument(byte[] bytes, String fileName, String mimeType, String format) {
+        this.pendingExportBytesToWrite = bytes;
+        this.pendingExportFileName = fileName;
+        this.pendingExportMimeType = mimeType;
+        this.pendingExportFormat = format;
+        try {
+            Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+            intent.addCategory(Intent.CATEGORY_OPENABLE);
+            intent.setType(mimeType);
+            intent.putExtra(Intent.EXTRA_TITLE, fileName);
+            startActivityForResult(intent, REQ_CODE_EXPORT_CREATE_DOC);
+        } catch (Exception e) {
+            dispatchExportResult(false, format, fileName, "Could not open file saver dialog on this device.");
+        }
+    }
+
+    private void dispatchExportResult(boolean success, String format, String fileName, String error) {
+        if (bridge == null || bridge.getWebView() == null) return;
+        String safeFmt = format == null ? "" : format.replace("'", "\\'");
+        String safeName = fileName == null ? "" : fileName.replace("'", "\\'");
+        String safeErr = error == null ? "" : error.replace("'", "\\'").replace("\n", " ");
+        String js = String.format(
+            Locale.US,
+            "window.dispatchEvent(new CustomEvent('bb-export-result', { detail: { success: %s, format: '%s', fileName: '%s', error: '%s' } }));",
+            success ? "true" : "false",
+            safeFmt,
+            safeName,
+            safeErr
+        );
+        bridge.getWebView().evaluateJavascript(js, null);
+    }
+
+    private byte[] generatePdfBytesFromReportJson(String reportJson) throws Exception {
+        JSONObject obj = new JSONObject(reportJson != null ? reportJson : "{}");
+        String rangeLabel = obj.optString("rangeLabel", "Report");
+        String exportedDate = obj.optString("exportedDate", "");
+        String currency = obj.optString("currency", "INR");
+        String totalIncome = obj.optString("totalIncome", "0.00");
+        String totalExpense = obj.optString("totalExpense", "0.00");
+        String netBalance = obj.optString("netBalance", "0.00");
+        boolean isNetPositive = obj.optBoolean("isNetPositive", true);
+        JSONArray rows = obj.optJSONArray("rows");
+        if (rows == null) rows = new JSONArray();
+
+        final int pageWidth = 595;
+        final int pageHeight = 842;
+        final float marginLeft = 36f;
+        final float marginRight = 559f;
+        final float contentWidth = marginRight - marginLeft;
+
+        PdfDocument doc = new PdfDocument();
+        Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
+        Paint textPaint = new Paint(Paint.ANTI_ALIAS_FLAG);
+
+        int pageNumber = 1;
+        PdfDocument.PageInfo pageInfo = new PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNumber).create();
+        PdfDocument.Page page = doc.startPage(pageInfo);
+        Canvas canvas = page.getCanvas();
+
+        // Background
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(Color.WHITE);
+        canvas.drawRect(0, 0, pageWidth, pageHeight, paint);
+
+        // Header Title & Subtitle
+        textPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+        textPaint.setTextSize(18f);
+        textPaint.setColor(Color.parseColor("#2357A4"));
+        canvas.drawText("Busy Bees Expense Tracker", marginLeft, 50f, textPaint);
+
+        textPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.NORMAL));
+        textPaint.setTextSize(10f);
+        textPaint.setColor(Color.parseColor("#64748B"));
+        canvas.drawText("Exported: " + exportedDate + "  |  Period: " + rangeLabel, marginLeft, 67f, textPaint);
+
+        // Rupee-Bee (₹ + Golden Bee) Circular Medallion on top right
+        float logoCx = marginRight - 19f;
+        float logoCy = 52f;
+        float logoR = 18f;
+
+        // Royal Blue Medallion Fill
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(Color.parseColor("#2357A4"));
+        canvas.drawCircle(logoCx, logoCy, logoR, paint);
+
+        // Honey Gold Metallic Rim
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(2f);
+        paint.setColor(Color.parseColor("#F59E0B"));
+        canvas.drawCircle(logoCx, logoCy, logoR, paint);
+
+        // Crisp White Indian Rupee (₹) Symbol inside Medallion
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeCap(Paint.Cap.ROUND);
+        paint.setStrokeJoin(Paint.Join.ROUND);
+        paint.setStrokeWidth(2.3f);
+        paint.setColor(Color.WHITE);
+        // Top & Middle horizontal bars of ₹
+        canvas.drawLine(logoCx - 9f, logoCy - 8f, logoCx + 4f, logoCy - 8f, paint);
+        canvas.drawLine(logoCx - 9f, logoCy - 3f, logoCx + 3f, logoCy - 3f, paint);
+        // Curved right loop of ₹ (open on the left) & diagonal leg
+        RectF rupeeLoop = new RectF(logoCx - 5.5f, logoCy - 8f, logoCx + 3.5f, logoCy + 2f);
+        canvas.drawArc(rupeeLoop, -90f, 180f, false, paint);
+        canvas.drawLine(logoCx - 5.5f, logoCy + 2f, logoCx - 1f, logoCy + 2f, paint);
+        // Diagonal leg of ₹
+        canvas.drawLine(logoCx - 5.5f, logoCy + 2f, logoCx + 4f, logoCy + 10.5f, paint);
+
+        // Golden Swooping Flight Trail through the ₹ loop
+        paint.setStrokeWidth(1.6f);
+        paint.setColor(Color.parseColor("#FDE047"));
+        RectF swoopArc = new RectF(logoCx - 11f, logoCy - 6f, logoCx + 7f, logoCy + 8f);
+        canvas.drawArc(swoopArc, 15f, 115f, false, paint);
+
+        // Golden Honeybee at top-right of the ₹ loop
+        RectF beeBody = new RectF(logoCx + 2.5f, logoCy - 8.5f, logoCx + 11.5f, logoCy - 2.5f);
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(Color.parseColor("#FBBF24"));
+        canvas.drawOval(beeBody, paint);
+
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(1f);
+        paint.setColor(Color.parseColor("#0F172A"));
+        canvas.drawOval(beeBody, paint);
+        // Bee Stripes
+        canvas.drawLine(logoCx + 6f, logoCy - 8.2f, logoCx + 6f, logoCy - 2.8f, paint);
+        canvas.drawLine(logoCx + 8.5f, logoCy - 8.0f, logoCx + 8.5f, logoCy - 3.0f, paint);
+
+        // Translucent White Bee Wing
+        RectF beeWing = new RectF(logoCx + 4f, logoCy - 12.2f, logoCx + 8.8f, logoCy - 7.5f);
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(Color.WHITE);
+        canvas.drawOval(beeWing, paint);
+
+        // Header Bottom Border Line
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(Color.parseColor("#2357A4"));
+        canvas.drawRect(marginLeft, 80f, marginRight, 82f, paint);
+
+        // 3 Summary Cards
+        float cardGap = 11f;
+        float cardWidth = (contentWidth - (cardGap * 2f)) / 3f;
+        float cardTop = 94f;
+        float cardBottom = 148f;
+
+        String[] cardTitles = new String[]{"TOTAL INCOME", "TOTAL EXPENSE", "NET BALANCE"};
+        String[] cardValues = new String[]{
+            "+" + currency + " " + totalIncome,
+            "-" + currency + " " + totalExpense,
+            (isNetPositive ? "" : "-") + currency + " " + netBalance
+        };
+        int[] cardColors = new int[]{
+            Color.parseColor("#16A34A"),
+            Color.parseColor("#DC2626"),
+            isNetPositive ? Color.parseColor("#16A34A") : Color.parseColor("#DC2626")
+        };
+
+        for (int i = 0; i < 3; i++) {
+            float cLeft = marginLeft + i * (cardWidth + cardGap);
+            float cRight = cLeft + cardWidth;
+            RectF rect = new RectF(cLeft, cardTop, cRight, cardBottom);
+
+            paint.setStyle(Paint.Style.FILL);
+            paint.setColor(Color.parseColor("#F8FAFC"));
+            canvas.drawRoundRect(rect, 6f, 6f, paint);
+
+            paint.setStyle(Paint.Style.STROKE);
+            paint.setStrokeWidth(1f);
+            paint.setColor(Color.parseColor("#E2E8F0"));
+            canvas.drawRoundRect(rect, 6f, 6f, paint);
+
+            textPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+            textPaint.setTextSize(8f);
+            textPaint.setColor(Color.parseColor("#64748B"));
+            canvas.drawText(cardTitles[i], cLeft + 10f, cardTop + 18f, textPaint);
+
+            textPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+            textPaint.setTextSize(12f);
+            textPaint.setColor(cardColors[i]);
+            canvas.drawText(ellipsizeText(cardValues[i], textPaint, cardWidth - 20f), cLeft + 10f, cardTop + 39f, textPaint);
+        }
+
+        // Draw Table Header on Page 1
+        float currentY = drawPdfTableHeader(canvas, paint, textPaint, marginLeft, marginRight, 166f);
+
+        if (rows.length() == 0) {
+            textPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.NORMAL));
+            textPaint.setTextSize(10f);
+            textPaint.setColor(Color.parseColor("#64748B"));
+            canvas.drawText("No transactions recorded in this period.", marginLeft + 8f, currentY + 22f, textPaint);
+        } else {
+            for (int i = 0; i < rows.length(); i++) {
+                JSONObject row = rows.optJSONObject(i);
+                if (row == null) continue;
+
+                if (currentY + 24f > 784f) {
+                    drawPdfPageFooter(canvas, textPaint, pageWidth, pageNumber);
+                    doc.finishPage(page);
+                    pageNumber++;
+                    pageInfo = new PdfDocument.PageInfo.Builder(pageWidth, pageHeight, pageNumber).create();
+                    page = doc.startPage(pageInfo);
+                    canvas = page.getCanvas();
+
+                    paint.setStyle(Paint.Style.FILL);
+                    paint.setColor(Color.WHITE);
+                    canvas.drawRect(0, 0, pageWidth, pageHeight, paint);
+
+                    currentY = drawPdfTableHeader(canvas, paint, textPaint, marginLeft, marginRight, 40f);
+                }
+
+                String dateStr = row.optString("date", "");
+                String typeStr = row.optString("type", "");
+                boolean isIncome = row.optBoolean("isIncome", false);
+                String categoryStr = row.optString("category", "");
+                String noteStr = row.optString("note", "-");
+                if (noteStr.isEmpty()) noteStr = "-";
+                String amountStr = row.optString("amount", "");
+
+                float textBaseline = currentY + 15f;
+
+                // Date
+                textPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.NORMAL));
+                textPaint.setTextSize(9f);
+                textPaint.setColor(Color.parseColor("#1E293B"));
+                canvas.drawText(ellipsizeText(dateStr, textPaint, 68f), marginLeft + 6f, textBaseline, textPaint);
+
+                // Type
+                textPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+                textPaint.setColor(isIncome ? Color.parseColor("#16A34A") : Color.parseColor("#DC2626"));
+                canvas.drawText(ellipsizeText(typeStr, textPaint, 52f), marginLeft + 78f, textBaseline, textPaint);
+
+                // Category
+                textPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.NORMAL));
+                textPaint.setColor(Color.parseColor("#1E293B"));
+                canvas.drawText(ellipsizeText(categoryStr, textPaint, 128f), marginLeft + 136f, textBaseline, textPaint);
+
+                // Note
+                textPaint.setColor(Color.parseColor("#64748B"));
+                canvas.drawText(ellipsizeText(noteStr, textPaint, 145f), marginLeft + 270f, textBaseline, textPaint);
+
+                // Amount (Right-aligned)
+                textPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+                textPaint.setColor(isIncome ? Color.parseColor("#16A34A") : Color.parseColor("#DC2626"));
+                textPaint.setTextAlign(Paint.Align.RIGHT);
+                canvas.drawText(ellipsizeText(amountStr, textPaint, 95f), marginRight - 6f, textBaseline, textPaint);
+                textPaint.setTextAlign(Paint.Align.LEFT);
+
+                // Row bottom divider
+                paint.setStyle(Paint.Style.FILL);
+                paint.setColor(Color.parseColor("#E2E8F0"));
+                canvas.drawRect(marginLeft, currentY + 22f, marginRight, currentY + 22.8f, paint);
+
+                currentY += 23f;
+            }
+        }
+
+        drawPdfPageFooter(canvas, textPaint, pageWidth, pageNumber);
+        doc.finishPage(page);
+
+        ByteArrayOutputStream baos = new ByteArrayOutputStream();
+        doc.writeTo(baos);
+        doc.close();
+        return baos.toByteArray();
+    }
+
+    private float drawPdfTableHeader(Canvas canvas, Paint paint, Paint textPaint, float left, float right, float topY) {
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(Color.parseColor("#F1F5F9"));
+        canvas.drawRect(left, topY, right, topY + 22f, paint);
+
+        paint.setColor(Color.parseColor("#CBD5E1"));
+        canvas.drawRect(left, topY + 21f, right, topY + 22.2f, paint);
+
+        textPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.BOLD));
+        textPaint.setTextSize(9f);
+        textPaint.setColor(Color.parseColor("#334155"));
+        float baseline = topY + 14.5f;
+
+        canvas.drawText("Date", left + 6f, baseline, textPaint);
+        canvas.drawText("Type", left + 78f, baseline, textPaint);
+        canvas.drawText("Category", left + 136f, baseline, textPaint);
+        canvas.drawText("Note", left + 270f, baseline, textPaint);
+
+        textPaint.setTextAlign(Paint.Align.RIGHT);
+        canvas.drawText("Amount", right - 6f, baseline, textPaint);
+        textPaint.setTextAlign(Paint.Align.LEFT);
+
+        return topY + 23f;
+    }
+
+    private void drawPdfPageFooter(Canvas canvas, Paint textPaint, int pageWidth, int pageNumber) {
+        textPaint.setTypeface(Typeface.create(Typeface.DEFAULT, Typeface.NORMAL));
+        textPaint.setTextSize(8.5f);
+        textPaint.setColor(Color.parseColor("#94A3B8"));
+        textPaint.setTextAlign(Paint.Align.CENTER);
+        canvas.drawText(
+            "Busy Bees Expense Tracker  ·  100% Offline & Private on your device  ·  Page " + pageNumber,
+            pageWidth / 2f,
+            816f,
+            textPaint
+        );
+        textPaint.setTextAlign(Paint.Align.LEFT);
+    }
+
+    private String ellipsizeText(String text, Paint paint, float maxWidth) {
+        if (text == null) return "";
+        if (paint.measureText(text) <= maxWidth) return text;
+        String ellipsis = "...";
+        int len = text.length();
+        while (len > 1 && paint.measureText(text, 0, len) + paint.measureText(ellipsis) > maxWidth) {
+            len--;
+        }
+        return text.substring(0, len) + ellipsis;
     }
 
     private void saveInternalBackupCopy(String jsonContent, long timestampMs) {
         try {
+            byte[] bytes = jsonContent.getBytes(StandardCharsets.UTF_8);
+
+            // 1. SharedPreferences cache (backed up by Android Google Drive Auto-Backup)
             SharedPreferences prefs = getSharedPreferences(DRIVE_PREFS_NAME, Context.MODE_PRIVATE);
             prefs.edit()
                 .putString(KEY_DRIVE_LAST_JSON, jsonContent)
                 .putLong(KEY_DRIVE_LAST_MODIFIED, timestampMs)
                 .apply();
 
+            // 2. Internal filesDir copy (overwrites old backup file automatically)
             File file = new File(getFilesDir(), "busy_bees_expense_tracker_backup.json");
             try (FileOutputStream fos = new FileOutputStream(file, false)) {
-                fos.write(jsonContent.getBytes(StandardCharsets.UTF_8));
+                fos.write(bytes);
                 fos.flush();
+            }
+
+            // 3. App external filesDir copy (overwrites old backup file automatically)
+            File extDir = getExternalFilesDir(null);
+            if (extDir != null) {
+                File extFile = new File(extDir, "busy_bees_expense_tracker_backup.json");
+                try (FileOutputStream fos = new FileOutputStream(extFile, false)) {
+                    fos.write(bytes);
+                    fos.flush();
+                }
+            }
+
+            // 4. Silent MediaStore app-scoped backup copy (replaces previous backup automatically in background)
+            saveMediaStoreBackupCopy(bytes);
+
+            // 5. Notify Android BackupManager so Google Drive Auto-Backup syncs in background
+            try {
+                new BackupManager(this).dataChanged();
+            } catch (Exception ignored) {
             }
         } catch (Exception ignored) {
         }
     }
 
+    private void saveMediaStoreBackupCopy(byte[] bytes) {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return;
+        try {
+            deleteMediaStoreBackupCopy();
+            ContentResolver resolver = getContentResolver();
+            ContentValues values = new ContentValues();
+            values.put(MediaStore.MediaColumns.DISPLAY_NAME, "busy_bees_expense_tracker_backup.json");
+            values.put(MediaStore.MediaColumns.MIME_TYPE, "application/json");
+            values.put(MediaStore.MediaColumns.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/BusyBeesBackup");
+            Uri collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
+            Uri itemUri = resolver.insert(collection, values);
+            if (itemUri != null) {
+                try (OutputStream os = resolver.openOutputStream(itemUri, "wt")) {
+                    if (os != null) {
+                        os.write(bytes);
+                        os.flush();
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void deleteMediaStoreBackupCopy() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return;
+        try {
+            ContentResolver resolver = getContentResolver();
+            Uri collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
+            resolver.delete(
+                collection,
+                MediaStore.MediaColumns.DISPLAY_NAME + " = ?",
+                new String[]{"busy_bees_expense_tracker_backup.json"}
+            );
+        } catch (Exception ignored) {
+        }
+    }
+
+    private String readMediaStoreBackupCopy() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return "";
+        try {
+            ContentResolver resolver = getContentResolver();
+            Uri collection = MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY);
+            String[] projection = new String[]{MediaStore.MediaColumns._ID};
+            String selection = MediaStore.MediaColumns.DISPLAY_NAME + " = ?";
+            String[] selectionArgs = new String[]{"busy_bees_expense_tracker_backup.json"};
+            String sortOrder = MediaStore.MediaColumns.DATE_MODIFIED + " DESC";
+            try (Cursor cursor = resolver.query(collection, projection, selection, selectionArgs, sortOrder)) {
+                if (cursor != null && cursor.moveToFirst()) {
+                    long id = cursor.getLong(0);
+                    Uri itemUri = ContentUris.withAppendedId(collection, id);
+                    try (InputStream is = resolver.openInputStream(itemUri)) {
+                        if (is != null) {
+                            BufferedReader reader = new BufferedReader(new InputStreamReader(is, StandardCharsets.UTF_8));
+                            StringBuilder sb = new StringBuilder();
+                            String line;
+                            while ((line = reader.readLine()) != null) {
+                                sb.append(line).append("\n");
+                            }
+                            String content = sb.toString().trim();
+                            if (!content.isEmpty()) return content;
+                        }
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return "";
+    }
+
     private String readInternalBackupCopy() {
         try {
+            // 1. Check internal filesDir
             File file = new File(getFilesDir(), "busy_bees_expense_tracker_backup.json");
             if (file.exists() && file.length() > 0) {
                 try (FileInputStream fis = new FileInputStream(file)) {
@@ -673,8 +1309,43 @@ public class MainActivity extends BridgeActivity {
                     if (!res.isEmpty()) return res;
                 }
             }
+
+            // 2. Check SharedPreferences cache
             SharedPreferences prefs = getSharedPreferences(DRIVE_PREFS_NAME, Context.MODE_PRIVATE);
-            return prefs.getString(KEY_DRIVE_LAST_JSON, "");
+            String prefJson = prefs.getString(KEY_DRIVE_LAST_JSON, "");
+            if (prefJson != null && !prefJson.trim().isEmpty()) {
+                return prefJson.trim();
+            }
+
+            // 3. Check external filesDir
+            File extDir = getExternalFilesDir(null);
+            if (extDir != null) {
+                File extFile = new File(extDir, "busy_bees_expense_tracker_backup.json");
+                if (extFile.exists() && extFile.length() > 0) {
+                    try (FileInputStream fis = new FileInputStream(extFile)) {
+                        BufferedReader reader = new BufferedReader(new InputStreamReader(fis, StandardCharsets.UTF_8));
+                        StringBuilder sb = new StringBuilder();
+                        String line;
+                        while ((line = reader.readLine()) != null) {
+                            sb.append(line).append("\n");
+                        }
+                        String res = sb.toString().trim();
+                        if (!res.isEmpty()) return res;
+                    }
+                }
+            }
+
+            // 4. Check silent MediaStore backup copy (e.g. after app reinstall)
+            String mediaStoreJson = readMediaStoreBackupCopy();
+            if (!mediaStoreJson.isEmpty()) {
+                prefs.edit()
+                    .putString(KEY_DRIVE_LAST_JSON, mediaStoreJson)
+                    .putLong(KEY_DRIVE_LAST_MODIFIED, System.currentTimeMillis())
+                    .apply();
+                return mediaStoreJson;
+            }
+
+            return "";
         } catch (Exception e) {
             return "";
         }
@@ -725,7 +1396,6 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onStart() {
         super.onStart();
-        SmsFloatingBubbleService.hideBubble(this);
         IntentFilter filter = new IntentFilter(SmsTransactionProcessor.ACTION_SMS_DETECTED);
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(smsDetectedReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
@@ -741,24 +1411,6 @@ public class MainActivity extends BridgeActivity {
         } catch (Exception ignored) {
         }
         super.onStop();
-    }
-
-    private boolean isNotificationListenerEnabled() {
-        String pkgName = getPackageName();
-        final String flat = Settings.Secure.getString(
-            getContentResolver(),
-            "enabled_notification_listeners"
-        );
-        if (!TextUtils.isEmpty(flat)) {
-            final String[] names = flat.split(":");
-            for (String name : names) {
-                final ComponentName cn = ComponentName.unflattenFromString(name);
-                if (cn != null && TextUtils.equals(pkgName, cn.getPackageName())) {
-                    return true;
-                }
-            }
-        }
-        return false;
     }
 
     private void launchBiometricPrompt() {
@@ -833,6 +1485,7 @@ public class MainActivity extends BridgeActivity {
     private void updateSystemBarAppearance(boolean isDark) {
         Window window = getWindow();
         if (window == null) return;
+        WindowCompat.setDecorFitsSystemWindows(window, true);
         View decorView = window.getDecorView();
         WindowInsetsControllerCompat controller = WindowCompat.getInsetsController(window, decorView);
         if (controller != null) {

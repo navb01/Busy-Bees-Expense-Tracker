@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
 import { CloudDownload, RefreshCw, AlertTriangle } from 'lucide-react';
-import { AppSettings, Transaction, UserProfile } from '../../types';
+import { AppSettings, LogoVariant, Transaction, UserProfile } from '../../types';
 import { AppBackupSnapshot, storage } from '../../services/storage';
+import { BusyBeesLogo } from '../BusyBeesLogo';
 import {
   CloudBackupFileInfo,
   connectGoogleAccount,
@@ -15,6 +16,7 @@ import {
 
 interface WelcomeScreenProps {
   initialProfile: UserProfile;
+  logoVariant?: LogoVariant;
   onComplete: (profile: UserProfile) => void;
   onRestoredFromCloud?: (restored: {
     transactions: Transaction[];
@@ -25,6 +27,7 @@ interface WelcomeScreenProps {
 
 export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
   initialProfile,
+  logoVariant = 'swoosh',
   onComplete,
   onRestoredFromCloud,
 }) => {
@@ -65,29 +68,37 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
     setIsCheckingCloud(true);
     try {
       const { user, accessToken } = await connectGoogleAccount(true);
-      const fileInfo = await findCloudBackup(accessToken);
+      let fileInfo = await findCloudBackup(accessToken);
+      let snapshot: AppBackupSnapshot | null = null;
+
       if (!fileInfo) {
         if (isNativeDriveBridgeAvailable()) {
           const picked = await pickAndDownloadNativeBackup();
-          setFoundBackup({
-            fileInfo: picked.fileInfo,
-            snapshot: picked.snapshot,
-            email: user.email || '',
-          });
+          fileInfo = picked.fileInfo;
+          snapshot = picked.snapshot;
+        } else {
+          setCloudError(
+            `No Busy Bees backup was found in Google Drive for ${user.email || 'this account'}. You can set up your profile below.`
+          );
           return;
         }
-        setCloudError(
-          `No Busy Bees backup was found in Google Drive for ${user.email || 'this account'}. You can set up your profile below.`
-        );
-        return;
+      } else {
+        snapshot = await downloadCloudBackup(accessToken, fileInfo.id);
       }
 
-      const snapshot = await downloadCloudBackup(accessToken, fileInfo.id);
-      setFoundBackup({
-        fileInfo,
-        snapshot,
-        email: user.email || '',
+      const restored = storage.restoreFullBackupSnapshot(snapshot);
+      storage.saveBackupMeta({
+        lastBackupTime: new Date(fileInfo.modifiedTime).getTime(),
+        lastBackupSize: fileInfo.sizeBytes,
+        lastBackupTxCount: restored.transactions.length,
+        googleEmail: user.email || '',
       });
+      setFoundBackup(null);
+      if (onRestoredFromCloud) {
+        onRestoredFromCloud(restored);
+      } else {
+        onComplete(restored.profile);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Unable to check Google Drive backup.';
       if (!msg.includes('popup-closed-by-user')) {
@@ -116,11 +127,11 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
   };
 
   return (
-    <div className="flex-1 flex flex-col justify-between px-6 pt-11 pb-10 sm:pt-8 sm:pb-8 max-w-lg mx-auto w-full overflow-y-auto bg-slate-50 dark:bg-slate-900">
+    <div className="flex-1 min-h-0 flex flex-col justify-between px-6 pt-11 pb-20 sm:pt-8 sm:pb-8 max-w-lg mx-auto w-full overflow-y-auto bg-slate-50 dark:bg-slate-900">
       <form onSubmit={handleSubmit} className="flex-1 flex flex-col justify-between">
         <div className="space-y-5">
-          {/* Brand Header */}
-          <div className="flex items-center justify-between">
+          {/* Brand Header with Animated Rupee-Bee Logo */}
+          <div className="flex items-center justify-between gap-3">
             <div>
               <span className="text-xs font-semibold uppercase tracking-wider text-[#2357A4] dark:text-blue-400">
                 Welcome Aboard
@@ -129,12 +140,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
                 Busy Bees Expense Tracker
               </h1>
             </div>
-            <div
-              className="w-11 h-11 rounded-full border-2 border-[#2357A4] dark:border-blue-400 flex items-center justify-center text-[#2357A4] dark:text-blue-400 font-bold text-sm bg-white dark:bg-slate-800 shadow-xs select-none shrink-0"
-              aria-label="Busy Bees Logo"
-            >
-              BB
-            </div>
+            <BusyBeesLogo variant={logoVariant} size={52} animated={true} />
           </div>
 
           {/* WhatsApp-Style Restore from Google Drive Banner (for Reinstalls / New Phone) */}
@@ -252,7 +258,7 @@ export const WelcomeScreen: React.FC<WelcomeScreenProps> = ({
         </div>
 
         {/* Action Buttons */}
-        <div className="pt-5 mt-5 space-y-2">
+        <div className="pt-5 mt-5 pb-6 sm:pb-0 space-y-2">
           <button
             type="submit"
             className="w-full py-4 rounded-xl text-white font-semibold text-base bg-[#2357A4] hover:bg-[#1D4A8C] active:scale-[0.99] transition shadow-sm"

@@ -1,6 +1,7 @@
 import React from 'react';
 import { ArrowLeft, Menu } from 'lucide-react';
-import { ScreenType, UserProfile } from '../types';
+import { LogoVariant, ScreenType, UserProfile } from '../types';
+import { BusyBeesLogo } from './BusyBeesLogo';
 
 interface HeaderProps {
   currentScreen: ScreenType;
@@ -9,6 +10,7 @@ interface HeaderProps {
   onOpenDrawer: () => void;
   onOpenProfile: () => void;
   profile: UserProfile;
+  logoVariant?: LogoVariant;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -16,6 +18,7 @@ export const Header: React.FC<HeaderProps> = ({
   title,
   onBack,
   onOpenDrawer,
+  logoVariant = 'swoosh',
 }) => {
   const isDashboard = currentScreen === 'dashboard';
 
@@ -48,7 +51,7 @@ export const Header: React.FC<HeaderProps> = ({
   const isBrandTitle = screenTitle === 'Busy Bees Expense Tracker';
 
   return (
-    <header className="sticky top-0 z-30 flex items-center justify-between px-5 pt-10 pb-3.5 sm:py-4 bg-slate-50/95 dark:bg-slate-900/95 backdrop-blur-sm border-b border-slate-100 dark:border-slate-800 transition-colors">
+    <header className="shrink-0 z-30 flex items-center justify-between px-5 pt-10 pb-3.5 sm:py-4 bg-slate-50 dark:bg-slate-900 border-b border-slate-200/80 dark:border-slate-800 transition-colors">
       <div className="flex items-center gap-2.5 min-w-0">
         {isDashboard ? (
           <button
@@ -79,14 +82,11 @@ export const Header: React.FC<HeaderProps> = ({
         </h1>
       </div>
 
-      {/* Busy Bees "BB" Logo Badge */}
-      <div
-        className="w-10 h-10 rounded-full border-2 border-[#2357A4] dark:border-blue-400 flex items-center justify-center text-[#2357A4] dark:text-blue-400 font-bold text-sm bg-white dark:bg-slate-800 shadow-xs select-none shrink-0 ml-2"
-        aria-label="Busy Bees Logo"
-        title="Busy Bees Expense Tracker"
-      >
-        BB
+      {/* Static Rupee-Bee Brand Emblem in Top Header */}
+      <div className="shrink-0 ml-2">
+        <BusyBeesLogo variant={logoVariant} size={40} animated={false} />
       </div>
     </header>
   );
 };
+

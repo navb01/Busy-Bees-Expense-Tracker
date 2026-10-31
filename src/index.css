@@ -49,3 +49,85 @@
 html.dark ::-webkit-scrollbar-thumb {
   background: #475569;
 }
+
+/* Busy Bees Animated Rupee-Bee Logo Keyframes (Compositor-Friendly) */
+@keyframes bb-bee-swoop {
+  0%, 100% {
+    transform: translate3d(0px, 0px, 0px) rotate(-8deg);
+  }
+  25% {
+    transform: translate3d(-2.5px, -3.5px, 0px) rotate(-14deg) scale(1.03);
+  }
+  50% {
+    transform: translate3d(2px, -5px, 0px) rotate(-4deg) scale(1.05);
+  }
+  75% {
+    transform: translate3d(3px, -1.5px, 0px) rotate(-11deg) scale(1.02);
+  }
+}
+
+@keyframes bb-wing-flutter-left {
+  0%, 100% {
+    transform: rotate(0deg) scaleY(1);
+  }
+  50% {
+    transform: rotate(-18deg) scaleY(0.72);
+  }
+}
+
+@keyframes bb-wing-flutter-right {
+  0%, 100% {
+    transform: rotate(0deg) scaleY(1);
+  }
+  50% {
+    transform: rotate(16deg) scaleY(0.75);
+  }
+}
+
+@keyframes bb-trail-pulse {
+  0%, 100% {
+    opacity: 0.82;
+    stroke-dashoffset: 0;
+  }
+  50% {
+    opacity: 1;
+    stroke-dashoffset: -12;
+  }
+}
+
+@keyframes bb-sparkle-twinkle {
+  0%, 100% {
+    transform: scale(0.85) rotate(0deg);
+    opacity: 0.75;
+  }
+  50% {
+    transform: scale(1.18) rotate(25deg);
+    opacity: 1;
+  }
+}
+
+.animate-bb-bee-swoop {
+  animation: bb-bee-swoop 2.8s cubic-bezier(0.45, 0.05, 0.55, 0.95) infinite;
+  transform-origin: 62px 42px;
+}
+
+.animate-bb-wing-left {
+  animation: bb-wing-flutter-left 0.16s ease-in-out infinite;
+  transform-origin: 60px 36px;
+}
+
+.animate-bb-wing-right {
+  animation: bb-wing-flutter-right 0.16s ease-in-out infinite;
+  transform-origin: 66px 38px;
+}
+
+.animate-bb-trail {
+  stroke-dasharray: 6 4;
+  animation: bb-trail-pulse 1.8s linear infinite;
+}
+
+.animate-bb-sparkle {
+  animation: bb-sparkle-twinkle 1.6s ease-in-out infinite;
+  transform-origin: center;
+}
+

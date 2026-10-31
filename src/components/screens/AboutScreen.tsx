@@ -1,51 +1,69 @@
 import React, { useState } from 'react';
 import {
-  NotebookPen,
   ChevronRight,
   X,
   Shield,
-  Mail,
-  Send,
-  CheckCircle2,
   Zap,
   Lock,
   BatteryCharging,
+  Sparkles,
+  Check,
 } from 'lucide-react';
+import { AppSettings, LogoVariant } from '../../types';
+import { BusyBeesLogo } from '../BusyBeesLogo';
 
-export const AboutScreen: React.FC = () => {
+interface AboutScreenProps {
+  settings?: AppSettings;
+  onUpdateSettings?: (updates: Partial<AppSettings>) => void;
+  onShowToast?: (message: string) => void;
+}
+
+const LOGO_CONCEPTS: Array<{
+  id: LogoVariant;
+  badge: string;
+  title: string;
+  subtitle: string;
+}> = [
+  {
+    id: 'swoosh',
+    badge: 'Concept 1 · Primary',
+    title: 'Rupee Swoop',
+    subtitle: 'Golden bee weaving through the ₹ loop with flight trail',
+  },
+  {
+    id: 'monogram',
+    badge: 'Concept 2 · Preserved',
+    title: 'Honeycomb ₹ Crest',
+    subtitle: 'Geometric negative-space bee & ₹ hexagon monogram',
+  },
+  {
+    id: 'mascot',
+    badge: 'Concept 3 · Preserved',
+    title: '3D ₹ Coin Mascot',
+    subtitle: 'Friendly golden bee orbiting a gleaming ₹ gold coin',
+  },
+];
+
+export const AboutScreen: React.FC<AboutScreenProps> = ({
+  settings,
+  onUpdateSettings,
+  onShowToast,
+}) => {
   const [privacyModalOpen, setPrivacyModalOpen] = useState(false);
+  const [previewAnimated, setPreviewAnimated] = useState(true);
+  const activeVariant: LogoVariant = settings?.logoVariant || 'swoosh';
 
-  /* Busy Bees Support feature — commented out for later implementation
-  const [supportModalOpen, setSupportModalOpen] = useState(false);
-
-  // Support form state
-  const [supportName, setSupportName] = useState('');
-  const [supportEmail, setSupportEmail] = useState('');
-  const [supportCategory, setSupportCategory] = useState('General Feedback');
-  const [supportMessage, setSupportMessage] = useState('');
-  const [supportSent, setSupportSent] = useState(false);
-
-  const handleSendSupport = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!supportMessage.trim()) return;
-    setSupportSent(true);
-    setTimeout(() => {
-      setSupportSent(false);
-      setSupportModalOpen(false);
-      setSupportMessage('');
-    }, 2500);
+  const handleSelectLogoVariant = (variant: LogoVariant, title: string) => {
+    onUpdateSettings?.({ logoVariant: variant });
+    onShowToast?.(`Brand emblem set to ${title}`);
   };
-  */
 
   return (
-    <div className="flex-1 flex flex-col justify-between px-6 py-6 max-w-lg mx-auto w-full overflow-y-auto">
+    <div className="flex-1 flex flex-col justify-between px-6 pt-6 pb-20 sm:pb-8 max-w-lg mx-auto w-full">
       <div className="space-y-6">
-        {/* Top Header with BB Logo Emblem */}
+        {/* Top Header with Animated Rupee-Bee Logo Emblem */}
         <div className="flex items-center gap-4">
-          <div className="w-14 h-14 rounded-2xl bg-blue-50/90 dark:bg-blue-950/60 border border-blue-100 dark:border-blue-900 flex items-center justify-center text-[#2357A4] dark:text-blue-400 shadow-xs relative">
-            <NotebookPen className="w-7 h-7 stroke-[1.8]" />
-            <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-amber-400 border-2 border-white dark:border-slate-900 shadow-xs" />
-          </div>
+          <BusyBeesLogo variant={activeVariant} size={60} animated={true} />
           <div>
             <div className="flex items-center gap-1.5">
               <span className="text-xs text-slate-400 dark:text-slate-500 font-medium">Version 1.0.0</span>
@@ -66,6 +84,67 @@ export const AboutScreen: React.FC = () => {
           </p>
           <p className="text-[13.5px] text-slate-700 dark:text-slate-300 leading-relaxed font-normal mt-2">
             You are a <strong>busy bee</strong> with a full schedule. We designed this tracker to be effortlessly fast: record an expense in 3 seconds, keep all records private on your device, and get right back to your life.
+          </p>
+        </div>
+
+        {/* Brand Identity & Logo Concepts Gallery (Option 1 Primary + Options 2 & 3 Preserved) */}
+        <div className="space-y-2.5">
+          <div className="flex items-center justify-between pl-1">
+            <h3 className="text-xs font-semibold text-slate-400 dark:text-slate-500 uppercase tracking-wider">
+              Brand Identity & Logo Concepts
+            </h3>
+            <button
+              type="button"
+              onClick={() => setPreviewAnimated((prev) => !prev)}
+              className="flex items-center gap-1.5 text-xs font-medium text-[#2357A4] dark:text-blue-400 hover:underline"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>{previewAnimated ? 'Motion: On' : 'Motion: Static'}</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-3 gap-2.5">
+            {LOGO_CONCEPTS.map((concept) => {
+              const isSelected = activeVariant === concept.id;
+              return (
+                <button
+                  key={concept.id}
+                  type="button"
+                  onClick={() => handleSelectLogoVariant(concept.id, concept.title)}
+                  className={`p-3 rounded-2xl border text-left flex flex-col items-center transition active:scale-[0.98] ${
+                    isSelected
+                      ? 'bg-blue-50/70 dark:bg-blue-950/40 border-[#2357A4] dark:border-blue-400 shadow-xs'
+                      : 'bg-white dark:bg-slate-800 border-slate-200/80 dark:border-slate-700/80 hover:border-slate-300 dark:hover:border-slate-600'
+                  }`}
+                >
+                  <div className="my-1">
+                    <BusyBeesLogo
+                      variant={concept.id}
+                      size={56}
+                      animated={previewAnimated}
+                      title={concept.title}
+                    />
+                  </div>
+                  <div className="w-full text-center mt-2">
+                    <div className="text-[10px] font-medium text-amber-600 dark:text-amber-400">
+                      {concept.badge}
+                    </div>
+                    <div className="text-xs font-bold text-slate-900 dark:text-slate-100 mt-0.5 flex items-center justify-center gap-1">
+                      <span className="truncate">{concept.title}</span>
+                      {isSelected && (
+                        <Check className="w-3.5 h-3.5 text-[#2357A4] dark:text-blue-400 shrink-0" />
+                      )}
+                    </div>
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400 mt-1 leading-snug line-clamp-2">
+                      {concept.subtitle}
+                    </p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          <p className="text-[11px] text-slate-400 dark:text-slate-500 pl-1">
+            Concept 1 (Rupee Swoop) is active by default; Concepts 2 &amp; 3 are preserved here so you can preview or switch emblems anytime.
           </p>
         </div>
 

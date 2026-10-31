@@ -1,12 +1,14 @@
 import React from 'react';
 import { X, SlidersHorizontal, Cloud, Download, Info, UserRound, LogOut } from 'lucide-react';
-import { ScreenType } from '../types';
+import { LogoVariant, ScreenType } from '../types';
+import { BusyBeesLogo } from './BusyBeesLogo';
 
 interface DrawerProps {
   isOpen: boolean;
   onClose: () => void;
   onNavigate: (screen: ScreenType) => void;
   onRequestExit: () => void;
+  logoVariant?: LogoVariant;
 }
 
 export const Drawer: React.FC<DrawerProps> = ({
@@ -14,6 +16,7 @@ export const Drawer: React.FC<DrawerProps> = ({
   onClose,
   onNavigate,
   onRequestExit,
+  logoVariant = 'swoosh',
 }) => {
   if (!isOpen) return null;
 
@@ -38,16 +41,19 @@ export const Drawer: React.FC<DrawerProps> = ({
       {/* Drawer content */}
       <div className="relative z-10 w-[80%] max-w-xs h-full bg-white dark:bg-slate-900 shadow-2xl flex flex-col animate-in slide-in-from-left duration-200 border-r border-transparent dark:border-slate-800">
         {/* Header with top margin below phone status bar */}
-        <div className="flex items-center justify-between px-6 pt-11 pb-5 sm:pt-6 sm:pb-6">
-          <h2 className="text-xl font-brand text-slate-900 dark:text-slate-100 leading-snug tracking-wide">
-            Busy Bees Expense
-            <br />
-            Tracker
-          </h2>
+        <div className="flex items-center justify-between px-5 pt-11 pb-5 sm:pt-6 sm:pb-6">
+          <div className="flex items-center gap-3 min-w-0">
+            <BusyBeesLogo variant={logoVariant} size={42} animated={false} />
+            <h2 className="text-lg font-brand text-slate-900 dark:text-slate-100 leading-snug tracking-wide">
+              Busy Bees Expense
+              <br />
+              Tracker
+            </h2>
+          </div>
           <button
             onClick={onClose}
             aria-label="Close menu"
-            className="p-1.5 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-100 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition"
+            className="p-1.5 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-slate-100 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition shrink-0"
           >
             <X className="w-5 h-5 stroke-[2.2]" />
           </button>
@@ -105,7 +111,7 @@ export const Drawer: React.FC<DrawerProps> = ({
         </div>
 
         {/* Footer with bottom safe padding above system navigation bar */}
-        <div className="px-6 pt-5 pb-10 sm:py-6 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50">
+        <div className="px-6 pt-5 pb-14 sm:py-6 border-t border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-900/50">
           <p className="text-xs text-slate-500 dark:text-slate-400 font-normal">A little clarity, every day.</p>
           <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">Version 1.0.0</p>
         </div>

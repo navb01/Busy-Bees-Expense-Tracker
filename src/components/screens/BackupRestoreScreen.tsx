@@ -78,15 +78,10 @@ export const BackupRestoreScreen: React.FC<BackupRestoreScreenProps> = ({
     message: string;
   } | null>(null);
 
-  // Modals
+  //Modals
   const [frequencyModalOpen, setFrequencyModalOpen] = useState(false);
-  const [confirmBackupModalOpen, setConfirmBackupModalOpen] = useState(false);
-  const [confirmRestoreModalOpen, setConfirmRestoreModalOpen] = useState(false);
   const [confirmDeleteModalOpen, setConfirmDeleteModalOpen] = useState(false);
-  const [pendingRestoreSnapshot, setPendingRestoreSnapshot] = useState<{
-    fileInfo: CloudBackupFileInfo;
-    snapshot?: AppBackupSnapshot;
-  } | null>(null);
+  const [verifyModalOpen, setVerifyModalOpen] = useState(false);
 
   useEffect(() => {
     const unsub = subscribeAuthUser((user) => {
@@ -161,10 +156,20 @@ export const BackupRestoreScreen: React.FC<BackupRestoreScreenProps> = ({
     if (!silent) {
       setStatusBanner(null);
       setIsBusy(true);
-      setBusyAction('Checking Google Drive...');
+      setBusyAction('Verifying Google Drive backup status...');
     }
     try {
-      const token = await getAccessToken(false);
+      let token: string;
+      const currentMeta = storage.getBackupMeta();
+      if (!silent && !authUser?.email && !currentMeta.googleEmail) {
+        const connected = await connectGoogleAccount(false);
+        setAuthUser(connected.user);
+        setBackupMeta(storage.getBackupMeta());
+        token = connected.accessToken;
+      } else {
+        token = await getAccessToken(false);
+      }
+
       const found = await findCloudBackup(token);
       setCloudBackup(found);
       if (found) {
@@ -175,22 +180,28 @@ export const BackupRestoreScreen: React.FC<BackupRestoreScreenProps> = ({
         });
         setBackupMeta(updated);
         if (!silent) {
+          const timeStr = formatBackupTimestamp(found.modifiedTime);
           setStatusBanner({
-            type: 'info',
-            message: `Backup found on Google Drive (${formatBackupTimestamp(found.modifiedTime)}).`,
+            type: 'success',
+            message: `Verified: Latest backup found on Google Drive (${timeStr}).`,
           });
+          onShowToast(`Backup verified: ${timeStr}`);
+          setVerifyModalOpen(true);
         }
       } else if (!silent) {
         setStatusBanner({
           type: 'info',
-          message: 'No existing backup found on Google Drive for this account.',
+          message: 'No existing backup found on Google Drive yet. Tap "Back Up" to create one.',
         });
+        onShowToast('No cloud backup found yet');
+        setVerifyModalOpen(true);
       }
     } catch (err) {
       if (!silent) {
         const msg = err instanceof Error ? err.message : 'Unable to check Google Drive.';
         if (!msg.includes('popup-closed-by-user')) {
           setStatusBanner({ type: 'error', message: msg });
+          onShowToast('Could not verify cloud backup');
         }
       }
     } finally {
@@ -201,22 +212,14 @@ export const BackupRestoreScreen: React.FC<BackupRestoreScreenProps> = ({
     }
   };
 
-  // Step 1 of Backup: Open confirmation modal before writing/overwriting to Google Drive
-  const handleInitiateBackup = () => {
-    setStatusBanner(null);
-    setConfirmBackupModalOpen(true);
-  };
-
-  // Step 2 of Backup: Execute backup after user confirms
-  const handleConfirmBackupNow = async () => {
-    setConfirmBackupModalOpen(false);
+  // Automatic Background Backup: Overwrites old backup in the background with zero manual intervention
+  const handleInitiateBackup = async () => {
     setStatusBanner(null);
     setIsBusy(true);
-    setBusyAction('Connecting to Google Drive...');
+    setBusyAction('Backing up in the background...');
 
     try {
       let token = await getAccessToken(false);
-      setBusyAction('Checking previous backup...');
       let existing: CloudBackupFileInfo | null = null;
       try {
         existing = await findCloudBackup(token);
@@ -229,17 +232,17 @@ export const BackupRestoreScreen: React.FC<BackupRestoreScreenProps> = ({
         }
       }
 
-      setBusyAction('Uploading encrypted data to Google Drive...');
+      setBusyAction('Replacing previous backup in the background...');
       const snapshot = storage.getFullBackupSnapshot();
-      const uploaded = await uploadCloudBackup(token, snapshot, existing?.id);
+      const uploaded = await uploadCloudBackup(token, snapshot, existing?.id, false);
 
       setCloudBackup(uploaded);
       setBackupMeta(storage.getBackupMeta());
       setStatusBanner({
         type: 'success',
-        message: `Backed up ${snapshot.transactions.length} transaction(s) to Google Drive (${formatBytes(uploaded.sizeBytes)}).`,
+        message: `Backed up ${snapshot.transactions.length} transaction(s) automatically in the background (${formatBytes(uploaded.sizeBytes)}).`,
       });
-      onShowToast('Backup saved to Google Drive');
+      onShowToast('Backup saved in background');
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Backup failed. Please try again.';
       if (!msg.includes('popup-closed-by-user')) {
@@ -251,11 +254,11 @@ export const BackupRestoreScreen: React.FC<BackupRestoreScreenProps> = ({
     }
   };
 
-  // Step 1 of Restore: Locate cloud backup and open confirmation modal before overwriting local data
+  // Automatic Background Restore: Fetches and restores latest backup in the background with zero manual intervention
   const handleInitiateRestore = async () => {
     setStatusBanner(null);
     setIsBusy(true);
-    setBusyAction('Searching Google Drive for backup...');
+    setBusyAction('Restoring backup in the background...');
 
     try {
       let token = await getAccessToken(false);
@@ -271,29 +274,42 @@ export const BackupRestoreScreen: React.FC<BackupRestoreScreenProps> = ({
         }
       }
 
-      if (!found) {
+      let resolvedFileInfo: CloudBackupFileInfo | null = found;
+      let resolvedSnapshot: AppBackupSnapshot | null = null;
+
+      if (!resolvedFileInfo) {
         if (isNativeDriveBridgeAvailable()) {
-          setBusyAction('Select your backup file from Google Drive...');
           const picked = await pickAndDownloadNativeBackup();
-          setCloudBackup(picked.fileInfo);
-          setPendingRestoreSnapshot({ fileInfo: picked.fileInfo, snapshot: picked.snapshot });
-          setConfirmRestoreModalOpen(true);
+          resolvedFileInfo = picked.fileInfo;
+          resolvedSnapshot = picked.snapshot;
+        } else {
+          setStatusBanner({
+            type: 'error',
+            message: 'No backup file was found on Google Drive for this Google account.',
+          });
           return;
         }
-        setStatusBanner({
-          type: 'error',
-          message: 'No backup file was found on Google Drive for this Google account.',
-        });
-        return;
+      } else {
+        resolvedSnapshot = await downloadCloudBackup(token, resolvedFileInfo.id);
       }
 
-      setBusyAction('Fetching backup details...');
-      const snapshot = await downloadCloudBackup(token, found.id);
-      setCloudBackup(found);
-      setPendingRestoreSnapshot({ fileInfo: found, snapshot });
-      setConfirmRestoreModalOpen(true);
+      setCloudBackup(resolvedFileInfo);
+      const restored = storage.restoreFullBackupSnapshot(resolvedSnapshot);
+      const updatedMeta = storage.saveBackupMeta({
+        lastBackupTime: new Date(resolvedFileInfo.modifiedTime).getTime(),
+        lastBackupSize: resolvedFileInfo.sizeBytes,
+        lastBackupTxCount: restored.transactions.length,
+      });
+      setBackupMeta(updatedMeta);
+
+      onRestored(restored);
+      setStatusBanner({
+        type: 'success',
+        message: `Restored ${restored.transactions.length} transaction(s), profile, and settings automatically in the background.`,
+      });
+      onShowToast('Data restored in background');
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Failed to inspect backup on Google Drive.';
+      const msg = err instanceof Error ? err.message : 'Failed to restore backup from Google Drive.';
       if (!msg.includes('popup-closed-by-user')) {
         setStatusBanner({ type: 'error', message: msg });
       }
@@ -301,29 +317,6 @@ export const BackupRestoreScreen: React.FC<BackupRestoreScreenProps> = ({
       setIsBusy(false);
       setBusyAction('');
     }
-  };
-
-  // Step 2 of Restore: User confirmed overwriting local data with cloud backup
-  const handleConfirmRestoreNow = () => {
-    if (!pendingRestoreSnapshot?.snapshot) return;
-    const { snapshot, fileInfo } = pendingRestoreSnapshot;
-    setConfirmRestoreModalOpen(false);
-
-    const restored = storage.restoreFullBackupSnapshot(snapshot);
-    const updatedMeta = storage.saveBackupMeta({
-      lastBackupTime: new Date(fileInfo.modifiedTime).getTime(),
-      lastBackupSize: fileInfo.sizeBytes,
-      lastBackupTxCount: restored.transactions.length,
-    });
-    setBackupMeta(updatedMeta);
-    setPendingRestoreSnapshot(null);
-
-    onRestored(restored);
-    setStatusBanner({
-      type: 'success',
-      message: `Restored ${restored.transactions.length} transaction(s), profile, and settings from Google Drive.`,
-    });
-    onShowToast('Data restored from Google Drive');
   };
 
   // Delete Cloud Backup after confirmation
@@ -386,7 +379,7 @@ export const BackupRestoreScreen: React.FC<BackupRestoreScreenProps> = ({
       : null;
 
   return (
-    <div className="flex-1 px-6 py-6 max-w-lg mx-auto w-full overflow-y-auto space-y-6 pb-20">
+    <div className="flex-1 px-6 pt-6 pb-28 sm:pb-10 max-w-lg mx-auto w-full space-y-6">
       {/* Status Banner */}
       {statusBanner && (
         <div
@@ -639,105 +632,6 @@ export const BackupRestoreScreen: React.FC<BackupRestoreScreenProps> = ({
         </div>
       )}
 
-      {/* Modal 2: Explicit Confirmation Before Backing Up / Overwriting Cloud Backup */}
-      {confirmBackupModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="w-full max-w-xs bg-white dark:bg-slate-800 rounded-2xl p-5 shadow-2xl border border-slate-100 dark:border-slate-700 text-center animate-in fade-in zoom-in-95">
-            <div className="w-12 h-12 rounded-full bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center mx-auto mb-3">
-              <CloudUpload className="w-6 h-6" />
-            </div>
-            <h3 className="font-bold text-slate-900 dark:text-slate-100 text-base">
-              Back Up to Google Drive?
-            </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
-              This will upload your current device data ({transactions.length} transaction
-              {transactions.length === 1 ? '' : 's'}, profile, and settings) to Google Drive
-              {connectedEmail ? ` (${connectedEmail})` : ''} and replace any previous backup.
-            </p>
-            <div className="mt-5 flex gap-2.5">
-              <button
-                type="button"
-                onClick={() => setConfirmBackupModalOpen(false)}
-                className="flex-1 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-sm font-medium hover:bg-slate-50 dark:hover:bg-slate-700 transition"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmBackupNow}
-                className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold transition"
-              >
-                Back Up Now
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal 3: Explicit Confirmation Before Restoring & Replacing Local Data */}
-      {confirmRestoreModalOpen && pendingRestoreSnapshot && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
-          <div className="w-full max-w-xs bg-white dark:bg-slate-800 rounded-2xl p-5 shadow-2xl border border-slate-100 dark:border-slate-700 text-center animate-in fade-in zoom-in-95">
-            <div className="w-12 h-12 rounded-full bg-blue-50 dark:bg-blue-950/60 text-[#2357A4] dark:text-blue-400 flex items-center justify-center mx-auto mb-3">
-              <CloudDownload className="w-6 h-6" />
-            </div>
-            <h3 className="font-bold text-slate-900 dark:text-slate-100 text-base">
-              Restore from Google Drive?
-            </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
-              Restoring will replace the current data on this phone with the backup from Google Drive:
-            </p>
-            <div className="mt-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-900/70 border border-slate-100 dark:border-slate-700 text-left text-xs space-y-1.5">
-              <div className="flex justify-between">
-                <span className="text-slate-500">Backup Date:</span>
-                <span className="font-semibold text-slate-800 dark:text-slate-200">
-                  {formatBackupTimestamp(pendingRestoreSnapshot.fileInfo.modifiedTime)}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-slate-500">Transactions:</span>
-                <span className="font-semibold text-slate-800 dark:text-slate-200">
-                  {pendingRestoreSnapshot.snapshot?.transactions.length ?? 0} entries
-                </span>
-              </div>
-              {pendingRestoreSnapshot.snapshot?.profile?.name && (
-                <div className="flex justify-between">
-                  <span className="text-slate-500">Profile:</span>
-                  <span className="font-semibold text-slate-800 dark:text-slate-200">
-                    {pendingRestoreSnapshot.snapshot.profile.name}
-                  </span>
-                </div>
-              )}
-              <div className="flex justify-between">
-                <span className="text-slate-500">Size:</span>
-                <span className="font-medium text-slate-700 dark:text-slate-300">
-                  {formatBytes(pendingRestoreSnapshot.fileInfo.sizeBytes)}
-                </span>
-              </div>
-            </div>
-            <div className="mt-5 flex gap-2.5">
-              <button
-                type="button"
-                onClick={() => {
-                  setConfirmRestoreModalOpen(false);
-                  setPendingRestoreSnapshot(null);
-                }}
-                className="flex-1 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-sm font-medium hover:bg-slate-50 dark:hover:bg-slate-700 transition"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleConfirmRestoreNow}
-                className="flex-1 py-2.5 rounded-xl bg-[#2357A4] hover:bg-[#1D4A8C] text-white text-sm font-semibold transition"
-              >
-                Restore
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Modal 4: Explicit Confirmation Before Deleting Cloud Backup */}
       {confirmDeleteModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
@@ -765,6 +659,96 @@ export const BackupRestoreScreen: React.FC<BackupRestoreScreenProps> = ({
                 className="flex-1 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-sm font-semibold transition"
               >
                 Delete
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal 5: Cloud Backup Status Verification Result */}
+      {verifyModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs">
+          <div className="w-full max-w-xs bg-white dark:bg-slate-800 rounded-2xl p-5 shadow-2xl border border-slate-100 dark:border-slate-700 text-center animate-in fade-in zoom-in-95">
+            <div
+              className={`w-12 h-12 rounded-full flex items-center justify-center mx-auto mb-3 ${
+                cloudBackup || backupMeta.lastBackupTime
+                  ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400'
+                  : 'bg-blue-50 dark:bg-blue-950/60 text-[#2357A4] dark:text-blue-400'
+              }`}
+            >
+              {cloudBackup || backupMeta.lastBackupTime ? (
+                <CheckCircle2 className="w-6 h-6" />
+              ) : (
+                <Cloud className="w-6 h-6" />
+              )}
+            </div>
+
+            <h3 className="font-bold text-slate-900 dark:text-slate-100 text-base">
+              {cloudBackup || backupMeta.lastBackupTime
+                ? 'Cloud Backup Verified'
+                : 'No Cloud Backup Recorded Yet'}
+            </h3>
+
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1.5 leading-relaxed">
+              {cloudBackup || backupMeta.lastBackupTime
+                ? 'Your Google Drive backup status is up to date:'
+                : 'No backup has been saved yet. Tap Back Up Now to save your data automatically in the background.'}
+            </p>
+
+            <div className="mt-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-900/70 border border-slate-100 dark:border-slate-700 text-left text-xs space-y-1.5">
+              <div className="flex justify-between gap-2">
+                <span className="text-slate-500">Account:</span>
+                <span className="font-semibold text-slate-800 dark:text-slate-200 truncate max-w-[150px]">
+                  {connectedEmail || 'Connected'}
+                </span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span className="text-slate-500">Last Backup:</span>
+                <span className="font-semibold text-slate-800 dark:text-slate-200">
+                  {lastTimeDisplay}
+                </span>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span className="text-slate-500">Backup Size:</span>
+                <span className="font-medium text-slate-700 dark:text-slate-300">
+                  {lastSizeDisplay}
+                </span>
+              </div>
+              {lastTxCount !== null && (
+                <div className="flex justify-between gap-2">
+                  <span className="text-slate-500">Saved Entries:</span>
+                  <span className="font-semibold text-slate-800 dark:text-slate-200">
+                    {lastTxCount} transaction{lastTxCount === 1 ? '' : 's'}
+                  </span>
+                </div>
+              )}
+              <div className="flex justify-between gap-2 pt-1 border-t border-slate-200/70 dark:border-slate-800">
+                <span className="text-slate-500">Phone Data:</span>
+                <span className="font-semibold text-[#2357A4] dark:text-blue-400">
+                  {transactions.length} transaction{transactions.length === 1 ? '' : 's'}
+                </span>
+              </div>
+            </div>
+
+            <div className="mt-5 space-y-2">
+              {!cloudBackup && !backupMeta.lastBackupTime && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setVerifyModalOpen(false);
+                    void handleInitiateBackup();
+                  }}
+                  className="w-full py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-semibold transition"
+                >
+                  Back Up Now
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setVerifyModalOpen(false)}
+                className="w-full py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-sm font-medium hover:bg-slate-50 dark:hover:bg-slate-700 transition"
+              >
+                Done
               </button>
             </div>
           </div>

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { Lock, Fingerprint, Delete } from 'lucide-react';
+import { Fingerprint, Delete } from 'lucide-react';
 import { authenticateWithBiometrics, isBiometricSupported } from '../services/biometricAuth';
+import { BusyBeesLogo } from './BusyBeesLogo';
 
 interface AppLockModalProps {
   isLocked: boolean;
@@ -122,8 +123,8 @@ export const AppLockModal: React.FC<AppLockModalProps> = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/85 backdrop-blur-md">
       <div className="w-full max-w-xs bg-white dark:bg-slate-800 rounded-3xl p-6 shadow-2xl text-center border border-slate-100 dark:border-slate-700 animate-in fade-in zoom-in-95">
-        <div className="w-12 h-12 rounded-full bg-blue-50 dark:bg-blue-950/60 text-[#2357A4] dark:text-blue-400 flex items-center justify-center mx-auto mb-3">
-          <Lock className="w-6 h-6 stroke-[2]" />
+        <div className="flex justify-center mb-3">
+          <BusyBeesLogo variant="monogram" size={52} animated={false} />
         </div>
         <h2 className="text-lg font-bold text-slate-900 dark:text-slate-100">Busy Bees Locked</h2>
         <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
